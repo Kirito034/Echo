@@ -7,6 +7,7 @@ import MobileNav from '@/components/ui/mobile-nav';
 import { apiRequest } from '@/lib/queryClient';
 import { useSocket, useMessageListener } from '@/lib/socket';
 import { User, Chat, Message } from '@shared/schema';
+import { X } from 'lucide-react';
 
 interface EnhancedChat extends Chat {
   participants: User[];
@@ -22,7 +23,9 @@ const ChatPage: React.FC = () => {
   // Fetch current user
   const { data: currentUser, isLoading: isUserLoading } = useQuery<User>({
     queryKey: ['/api/users/current'],
-    staleTime: Infinity
+    staleTime: Infinity,
+    retry: 1,
+    refetchOnWindowFocus: false
   });
   
   // Initialize socket connection

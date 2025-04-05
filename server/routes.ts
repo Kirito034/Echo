@@ -215,6 +215,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.status(401).json({ message: 'Unauthorized' });
   };
 
+  // Current user endpoint must come before wildcard routes
+  app.get('/api/users/current', isAuthenticated, (req, res) => {
+    // The user is already attached to the request by Passport
+    const { password, ...userWithoutPassword } = req.user as User;
+    res.json(userWithoutPassword);
+  });
+
   app.get('/api/users', isAuthenticated, async (_req, res) => {
     const users = await storage.getAllUsers();
     res.json(users);
