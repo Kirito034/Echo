@@ -24,7 +24,7 @@ interface ThemeProviderProps {
 }
 
 // Theme provider component
-export function ThemeProvider(props: ThemeProviderProps) {
+export function ThemeProvider({ children }: ThemeProviderProps) {
   // Get the saved theme from local storage or system preferences
   const getSavedTheme = (): Theme => {
     if (typeof window === 'undefined') return 'light';
@@ -76,7 +76,7 @@ export function ThemeProvider(props: ThemeProviderProps) {
   
   return (
     <ThemeContext.Provider value={value}>
-      {props.children}
+      {children}
     </ThemeContext.Provider>
   );
 }

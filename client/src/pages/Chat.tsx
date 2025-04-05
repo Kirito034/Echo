@@ -77,6 +77,38 @@ const ChatPage: React.FC = () => {
     (userId, status) => {
       // On user status change
       queryClient.invalidateQueries({ queryKey: ['/api/users'] });
+    },
+    // Handle new connection requests
+    (request) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/connection-requests/received'] });
+      toast({
+        title: 'New connection request',
+        description: `${request.sender.username} wants to connect with you`,
+      });
+    },
+    // Handle connection request responses
+    (requestId, accepted, responder) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/connection-requests/sent'] });
+      
+      if (accepted) {
+        toast({
+          title: 'Connection accepted',
+          description: `${responder.username} accepted your connection request`,
+        });
+      } else {
+        toast({
+          title: 'Connection rejected',
+          description: `${responder.username} rejected your connection request`,
+        });
+      }
+    },
+    // Handle new chat creation
+    (chat) => {
+      queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
+      toast({
+        title: 'New chat created',
+        description: 'You can now start messaging',
+      });
     }
   );
   

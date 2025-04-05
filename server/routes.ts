@@ -179,24 +179,55 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   message
                 });
                 
-                // Notify receiver if they're online
-                if (isUserConnected(receiverId)) {
-                  const client = connectedClients.get(receiverId);
-                  const sender = await storage.getUser(userId);
+                // Get the sender information
+                const sender = await storage.getUser(userId);
+                
+                if (sender) {
+                  // Log for debugging
+                  console.log(`Sending connection request notification to user ${receiverId}`);
                   
-                  if (sender) {
+                  // Prepare the full request object with sender info
+                  const fullRequest = {
+                    ...connectionRequest,
+                    sender: {
+                      id: sender.id,
+                      username: sender.username,
+                      email: sender.email,
+                      displayName: sender.displayName,
+                      avatarUrl: sender.avatarUrl,
+                      status: sender.status
+                    }
+                  };
+                  
+                  // Notify receiver if they're online
+                  if (isUserConnected(receiverId)) {
+                    const client = connectedClients.get(receiverId);
+                    
                     client?.send(JSON.stringify({
                       type: 'connection_request',
                       payload: {
-                        request: {
-                          ...connectionRequest,
-                          sender
-                        }
+                        request: fullRequest
                       }
+                    }));
+                    
+                    // Acknowledge successful delivery to sender
+                    ws.send(JSON.stringify({
+                      type: 'notification',
+                      payload: { message: 'Connection request sent successfully' }
+                    }));
+                  } else {
+                    // Receiver is offline, store notification for later
+                    console.log(`User ${receiverId} is offline, connection request saved for later`);
+                    
+                    // Acknowledge to sender
+                    ws.send(JSON.stringify({
+                      type: 'notification',
+                      payload: { message: 'Connection request sent (user is offline)' }
                     }));
                   }
                 }
               } catch (error) {
+                console.error('Error creating connection request:', error);
                 ws.send(JSON.stringify({
                   type: 'error',
                   payload: { message: 'Failed to create connection request' }
@@ -211,6 +242,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const requestId = data.payload.requestId;
               const accepted = data.payload.accepted;
               
+              console.log(`Processing connection response: Request ID ${requestId}, Accepted: ${accepted}`);
+              
               try {
                 // Update connection request in database
                 const request = await storage.updateConnectionRequestStatus(
@@ -218,69 +251,119 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   accepted ? 'accepted' : 'rejected'
                 );
                 
-                if (request && isUserConnected(request.senderId)) {
-                  // Notify the original sender of the connection request
-                  const client = connectedClients.get(request.senderId);
-                  const responder = await storage.getUser(userId);
+                if (!request) {
+                  console.error(`Connection request not found: ${requestId}`);
+                  ws.send(JSON.stringify({
+                    type: 'error',
+                    payload: { message: 'Connection request not found' }
+                  }));
+                  break;
+                }
+                
+                // Get the responder information with sensitive fields removed
+                const responder = await storage.getUser(userId);
+                if (!responder) {
+                  console.error(`Responder user not found: ${userId}`);
+                  break;
+                }
+                
+                const safeResponder = {
+                  id: responder.id,
+                  username: responder.username,
+                  email: responder.email,
+                  displayName: responder.displayName,
+                  avatarUrl: responder.avatarUrl,
+                  status: responder.status
+                };
+                
+                // Notify the original sender of the connection request if they're online
+                if (isUserConnected(request.senderId)) {
+                  console.log(`Sending connection response to user ${request.senderId}: ${accepted ? 'accepted' : 'rejected'}`);
                   
+                  const client = connectedClients.get(request.senderId);
                   client?.send(JSON.stringify({
                     type: 'connection_response',
                     payload: {
                       requestId,
                       accepted,
-                      responder
+                      responder: safeResponder
                     }
                   }));
+                } else {
+                  console.log(`Sender ${request.senderId} is offline, response will be saved for later`);
+                }
+                
+                // If the request was accepted, create a chat between the users
+                if (accepted) {
+                  console.log(`Connection accepted, creating chat between users ${userId} and ${request.senderId}`);
                   
-                  // If accepted, create a chat between the users
-                  if (accepted) {
-                    // Check if there's already a chat between these users
-                    const userChats = await storage.getChatsByUserId(userId);
-                    const existingChat = userChats.find(async (chat) => {
-                      const participants = await storage.getChatParticipants(chat.id);
-                      return participants.some(p => p.id === request.senderId);
+                  // Check if there's already a chat between these users
+                  const userChats = await storage.getChatsByUserId(userId);
+                  let existingChat = false;
+                  
+                  for (const chat of userChats) {
+                    const participants = await storage.getChatParticipants(chat.id);
+                    if (participants.some(p => p.id === request.senderId)) {
+                      existingChat = true;
+                      console.log(`Chat already exists: ${chat.id}`);
+                      break;
+                    }
+                  }
+                  
+                  if (!existingChat) {
+                    // Create a new chat
+                    const newChat = await storage.createChat({});
+                    console.log(`Created new chat: ${newChat.id}`);
+                    
+                    // Add both users as participants
+                    await storage.addParticipantToChat({
+                      chatId: newChat.id,
+                      userId: userId
                     });
                     
-                    if (!existingChat) {
-                      // Create a new chat
-                      const newChat = await storage.createChat({});
-                      
-                      // Add both users as participants
-                      await storage.addParticipantToChat({
-                        chatId: newChat.id,
-                        userId: userId
-                      });
-                      
-                      await storage.addParticipantToChat({
-                        chatId: newChat.id,
-                        userId: request.senderId
-                      });
-                      
-                      // Notify both users of the new chat
-                      const participants = await storage.getChatParticipants(newChat.id);
-                      const enhancedChat = {
-                        ...newChat,
-                        participants,
-                        lastMessage: null
-                      };
-                      
-                      if (isUserConnected(userId)) {
-                        connectedClients.get(userId)?.send(JSON.stringify({
-                          type: 'chat_created',
-                          payload: { chat: enhancedChat }
-                        }));
-                      }
-                      
-                      if (isUserConnected(request.senderId)) {
-                        connectedClients.get(request.senderId)?.send(JSON.stringify({
-                          type: 'chat_created',
-                          payload: { chat: enhancedChat }
-                        }));
-                      }
+                    await storage.addParticipantToChat({
+                      chatId: newChat.id,
+                      userId: request.senderId
+                    });
+                    
+                    // Prepare enhanced chat with participants info
+                    const participants = await storage.getChatParticipants(newChat.id);
+                    const enhancedChat = {
+                      ...newChat,
+                      participants,
+                      lastMessage: null
+                    };
+                    
+                    // Notify both users of the new chat
+                    if (isUserConnected(userId)) {
+                      console.log(`Notifying responder ${userId} of new chat`);
+                      connectedClients.get(userId)?.send(JSON.stringify({
+                        type: 'chat_created',
+                        payload: { chat: enhancedChat }
+                      }));
+                    }
+                    
+                    if (isUserConnected(request.senderId)) {
+                      console.log(`Notifying sender ${request.senderId} of new chat`);
+                      connectedClients.get(request.senderId)?.send(JSON.stringify({
+                        type: 'chat_created',
+                        payload: { chat: enhancedChat }
+                      }));
                     }
                   }
                 }
+                
+                // Acknowledge to the responder
+                ws.send(JSON.stringify({
+                  type: 'notification',
+                  payload: { 
+                    message: accepted ? 
+                      'Connection accepted successfully' : 
+                      'Connection rejected successfully' 
+                  }
+                }));
               } catch (error) {
+                console.error('Error processing connection response:', error);
                 ws.send(JSON.stringify({
                   type: 'error',
                   payload: { message: 'Failed to process connection response' }
