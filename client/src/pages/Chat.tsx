@@ -1,13 +1,23 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { X, UserPlus, Users } from 'lucide-react';
+import { useSocket, useMessageListener } from '@/lib/socket';
+import { User, Chat, Message } from '@shared/schema';
+import { apiRequest } from '@/lib/queryClient';
+import { Button } from '@/components/ui/button';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { toast } from '@/hooks/use-toast';
+import { Label } from '@/components/ui/label';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { useForm } from 'react-hook-form';
+import { z } from 'zod';
 import Header from '@/components/Header';
 import Sidebar from '@/components/Sidebar';
 import ChatArea from '@/components/ChatArea';
 import MobileNav from '@/components/ui/mobile-nav';
-import { apiRequest } from '@/lib/queryClient';
-import { useSocket, useMessageListener } from '@/lib/socket';
-import { User, Chat, Message } from '@shared/schema';
-import { X } from 'lucide-react';
 
 interface EnhancedChat extends Chat {
   participants: User[];
