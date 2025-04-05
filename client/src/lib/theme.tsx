@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect, type ReactNode } from 'react';
+import React from 'react';
 
 type Theme = 'light' | 'dark';
 
@@ -7,14 +7,25 @@ interface ThemeContextType {
   toggleTheme: () => void;
 }
 
-export const ThemeContext = createContext<ThemeContextType>({
+// Create the context with default values
+const ThemeContext = React.createContext<ThemeContextType>({
   theme: 'light',
   toggleTheme: () => {},
 });
 
-export const useTheme = () => useContext(ThemeContext);
+// Custom hook to use the theme context
+export function useTheme() {
+  return React.useContext(ThemeContext);
+}
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
+// Props type for ThemeProvider
+interface ThemeProviderProps {
+  children: React.ReactNode;
+}
+
+// Theme provider component
+export function ThemeProvider(props: ThemeProviderProps) {
+  // Get the saved theme from local storage or system preferences
   const getSavedTheme = (): Theme => {
     if (typeof window === 'undefined') return 'light';
     
@@ -30,9 +41,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return 'light';
   };
   
-  const [theme, setTheme] = useState<Theme>('light');
+  const [theme, setTheme] = React.useState<Theme>('light');
   
-  useEffect(() => {
+  React.useEffect(() => {
     const initialTheme = getSavedTheme();
     setTheme(initialTheme);
     
@@ -43,7 +54,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     }
   }, []);
   
-  const toggleTheme = () => {
+  const toggleTheme = React.useCallback(() => {
     setTheme((prevTheme) => {
       const newTheme = prevTheme === 'light' ? 'dark' : 'light';
       
@@ -57,11 +68,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       
       return newTheme;
     });
-  };
+  }, []);
+  
+  const value = React.useMemo(() => {
+    return { theme, toggleTheme };
+  }, [theme, toggleTheme]);
   
   return (
-    <ThemeContext.Provider value={{ theme, toggleTheme }}>
-      {children}
+    <ThemeContext.Provider value={value}>
+      {props.children}
     </ThemeContext.Provider>
   );
 }

@@ -8,7 +8,7 @@ import {
 import session from "express-session";
 import { Store } from "express-session";
 import { db } from "./db";
-import { eq, and, asc, or, inArray, ne } from "drizzle-orm";
+import { eq, and, asc, or, inArray, ne, sql } from "drizzle-orm";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
 import createMemoryStore from "memorystore";
@@ -101,18 +101,41 @@ export class DatabaseStorage implements IStorage {
   }
 
   async searchUsers(query: string, currentUserId: number): Promise<User[]> {
-    return await db
-      .select()
-      .from(users)
-      .where(
-        and(
-          ne(users.id, currentUserId),
-          or(
-            eq(users.username, query),
-            eq(users.email, query)
+    try {
+      // Use simple exact matches for safety
+      const exactMatches = await db.select()
+        .from(users)
+        .where(
+          and(
+            ne(users.id, currentUserId),
+            or(
+              eq(users.username, query),
+              eq(users.email, query)
+            )
           )
+        );
+      
+      // Then separately find partial matches in a way that's safer
+      const lowerQuery = query.toLowerCase();
+      const allUsers = await db.select()
+        .from(users)
+        .where(ne(users.id, currentUserId));
+      
+      // Filter users for partial matches in JavaScript (safer approach)
+      const partialMatches = allUsers.filter(user => 
+        !exactMatches.some(match => match.id === user.id) && (
+          user.email.toLowerCase().includes(lowerQuery) ||
+          user.username.toLowerCase().includes(lowerQuery) ||
+          (user.displayName && user.displayName.toLowerCase().includes(lowerQuery))
         )
       );
+      
+      // Combine both result sets with exact matches first
+      return [...exactMatches, ...partialMatches];
+    } catch (error) {
+      console.error("Error in searchUsers:", error);
+      return [];
+    }
   }
 
   // Connection request methods

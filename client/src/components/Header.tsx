@@ -1,5 +1,5 @@
 import React from 'react';
-import { Moon, Sun, Bell, LogOut } from 'lucide-react';
+import { Moon, Sun, LogOut, UserPlus } from 'lucide-react';
 import { AvatarWithStatus } from './ui/avatar-with-status';
 import { useTheme } from '@/lib/theme';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,10 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
 import { User } from '@shared/schema';
+import { NotificationsDropdown } from './ui/notifications-dropdown';
+import { AddUserDialog } from './ui/add-user-dialog';
+import { useQueryClient } from '@tanstack/react-query';
+import { useSocket } from '@/lib/socket';
 
 interface HeaderProps {
   currentUser: User;
@@ -18,6 +22,14 @@ interface HeaderProps {
 
 const Header: React.FC<HeaderProps> = ({ currentUser, onLogout }) => {
   const { theme, toggleTheme } = useTheme();
+  const queryClient = useQueryClient();
+  const { addMessageListener, sendMessage } = useSocket(currentUser?.id || null);
+  
+  // Handler when a new connection is accepted
+  const handleNewConnectionAccepted = () => {
+    // Invalidate chats to refresh the sidebar
+    queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
+  };
   
   return (
     <header className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
@@ -25,7 +37,23 @@ const Header: React.FC<HeaderProps> = ({ currentUser, onLogout }) => {
         <h1 className="text-xl font-semibold ml-2">Echo</h1>
       </div>
       
-      <div className="flex items-center space-x-4">
+      <div className="flex items-center space-x-3">
+        <AddUserDialog 
+          trigger={
+            <Button 
+              variant="outline" 
+              size="sm"
+              className="hidden sm:flex"
+            >
+              <UserPlus className="h-4 w-4 mr-2" />
+              Add Contact
+            </Button>
+          }
+          onUserAdded={handleNewConnectionAccepted}
+          addMessageListener={addMessageListener} 
+          sendMessage={sendMessage}
+        />
+        
         <Button 
           variant="ghost" 
           size="icon" 
@@ -44,14 +72,11 @@ const Header: React.FC<HeaderProps> = ({ currentUser, onLogout }) => {
           </div>
         </Button>
         
-        <Button 
-          variant="ghost" 
-          size="icon" 
-          className="rounded-full relative"
-        >
-          <Bell className="h-5 w-5" />
-          <span className="absolute top-0 right-0 h-2 w-2 bg-green-500 rounded-full"></span>
-        </Button>
+        {/* Notifications Dropdown */}
+        <NotificationsDropdown 
+          userId={currentUser.id} 
+          onNewConnectionAccepted={handleNewConnectionAccepted}
+        />
         
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -65,6 +90,15 @@ const Header: React.FC<HeaderProps> = ({ currentUser, onLogout }) => {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            <DropdownMenuItem className="cursor-pointer">
+              <UserPlus className="mr-2 h-4 w-4" />
+              <AddUserDialog 
+                trigger={<span className="cursor-pointer">Add Contact</span>}
+                onUserAdded={handleNewConnectionAccepted}
+                addMessageListener={addMessageListener} 
+                sendMessage={sendMessage}
+              />
+            </DropdownMenuItem>
             <DropdownMenuItem className="cursor-pointer" onClick={onLogout}>
               <LogOut className="mr-2 h-4 w-4" />
               <span>Log out</span>

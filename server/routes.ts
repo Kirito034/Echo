@@ -362,8 +362,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
     
     try {
+      // Support searching by email, username, or display name
       const users = await storage.searchUsers(query, currentUserId);
-      res.json(users);
+      
+      // Don't return password in the response
+      const usersWithoutPassword = users.map(user => {
+        const { password, ...userWithoutPassword } = user;
+        return userWithoutPassword;
+      });
+      
+      res.json(usersWithoutPassword);
     } catch (error) {
       res.status(500).json({ message: 'Error searching users' });
     }
