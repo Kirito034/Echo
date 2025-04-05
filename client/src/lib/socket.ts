@@ -100,25 +100,100 @@ export const useSocket = (userId: number | null) => {
 };
 
 // Hook for specific WebSocket message types
-export const useTypingIndicator = (sendMessage: (message: WSMessage) => void, chatId?: number) => {
-  const sendTypingIndicator = useCallback(() => {
+export const useTypingIndicator = (
+  sendMessage: (message: WSMessage) => void, 
+  chatId?: number,
+  isTyping?: boolean
+) => {
+  const [typingState, setTypingState] = useState(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Send typing indicator to server
+  const startTyping = useCallback(() => {
     if (!chatId) return;
     
-    sendMessage({
-      type: 'typing',
-      payload: { chatId }
-    });
-  }, [sendMessage, chatId]);
+    if (!typingState) {
+      setTypingState(true);
+      
+      // Send typing start event
+      sendMessage({
+        type: 'typing',
+        payload: { 
+          chatId, 
+          isTyping: true 
+        }
+      });
+    }
+    
+    // Reset timeout if already set
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    // Set new timeout to stop typing after 2 seconds of inactivity
+    typingTimeoutRef.current = setTimeout(() => {
+      setTypingState(false);
+      
+      // Send typing stop event
+      sendMessage({
+        type: 'typing',
+        payload: { 
+          chatId, 
+          isTyping: false 
+        }
+      });
+    }, 2000);
+  }, [sendMessage, chatId, typingState]);
   
-  return { sendTypingIndicator };
+  // Manually stop typing
+  const stopTyping = useCallback(() => {
+    if (!chatId) return;
+    
+    if (typingState) {
+      setTypingState(false);
+      
+      // Clear timeout if set
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = null;
+      }
+      
+      // Send typing stop event
+      sendMessage({
+        type: 'typing',
+        payload: { 
+          chatId, 
+          isTyping: false 
+        }
+      });
+    }
+  }, [sendMessage, chatId, typingState]);
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, []);
+  
+  return { 
+    isTyping: typingState,
+    startTyping,
+    stopTyping
+  };
 };
 
 export const useMessageListener = (
   addMessageListener: (listener: (message: WSMessage) => void) => () => void,
   onNewMessage?: (message: any) => void,
-  onTypingIndicator?: (userId: number, chatId: number) => void,
+  onTypingIndicator?: (userId: number, chatId: number, isTyping: boolean) => void,
   onReadReceipt?: (messageId: number) => void,
-  onUserStatusChange?: (userId: number, status: string) => void
+  onUserStatusChange?: (userId: number, status: string) => void,
+  onConnectionRequest?: (request: any) => void,
+  onConnectionResponse?: (requestId: number, accepted: boolean, responder: any) => void,
+  onChatCreated?: (chat: any) => void
 ) => {
   useEffect(() => {
     const removeListener = addMessageListener((message: WSMessage) => {
@@ -128,7 +203,8 @@ export const useMessageListener = (
           break;
         case 'typing':
           if (message.payload.userId && message.payload.chatId) {
-            onTypingIndicator?.(message.payload.userId, message.payload.chatId);
+            const isTyping = message.payload.isTyping === undefined ? true : !!message.payload.isTyping;
+            onTypingIndicator?.(message.payload.userId, message.payload.chatId, isTyping);
           }
           break;
         case 'read':
@@ -141,11 +217,107 @@ export const useMessageListener = (
             onUserStatusChange?.(message.payload.userId, message.payload.status);
           }
           break;
+        case 'connection_request':
+          if (message.payload.request) {
+            onConnectionRequest?.(message.payload.request);
+          }
+          break;
+        case 'connection_response':
+          if (message.payload.requestId !== undefined && 
+              message.payload.accepted !== undefined && 
+              message.payload.responder) {
+            onConnectionResponse?.(
+              message.payload.requestId, 
+              message.payload.accepted, 
+              message.payload.responder
+            );
+          }
+          break;
+        case 'chat_created':
+          if (message.payload.chat) {
+            onChatCreated?.(message.payload.chat);
+          }
+          break;
       }
     });
     
     return removeListener;
-  }, [addMessageListener, onNewMessage, onTypingIndicator, onReadReceipt, onUserStatusChange]);
+  }, [
+    addMessageListener, 
+    onNewMessage, 
+    onTypingIndicator, 
+    onReadReceipt, 
+    onUserStatusChange,
+    onConnectionRequest,
+    onConnectionResponse,
+    onChatCreated
+  ]);
+};
+
+// Connection request related hooks
+export const useConnectionRequests = (
+  addMessageListener: (listener: (message: WSMessage) => void) => () => void,
+  sendMessage: (message: WSMessage) => void,
+  onNewConnectionRequest?: (request: any) => void,
+  onConnectionResponse?: (requestId: number, accepted: boolean, responder: any) => void,
+  onNewChat?: (chat: any) => void
+) => {
+  useEffect(() => {
+    const removeListener = addMessageListener((message: WSMessage) => {
+      switch (message.type) {
+        case 'connection_request':
+          if (message.payload.request) {
+            onNewConnectionRequest?.(message.payload.request);
+          }
+          break;
+        case 'connection_response':
+          if (message.payload.requestId !== undefined && 
+              message.payload.accepted !== undefined && 
+              message.payload.responder) {
+            onConnectionResponse?.(
+              message.payload.requestId, 
+              message.payload.accepted, 
+              message.payload.responder
+            );
+          }
+          break;
+        case 'chat_created':
+          if (message.payload.chat) {
+            onNewChat?.(message.payload.chat);
+          }
+          break;
+      }
+    });
+    
+    return removeListener;
+  }, [addMessageListener, onNewConnectionRequest, onConnectionResponse, onNewChat]);
+
+  // Send a connection request
+  const sendConnectionRequest = useCallback((receiverId: number, message?: string) => {
+    sendMessage({
+      type: 'connection_request',
+      payload: { 
+        receiverId,
+        message 
+      }
+    });
+  }, [sendMessage]);
+
+  // Respond to a connection request
+  const respondToConnectionRequest = useCallback((requestId: number, accepted: boolean) => {
+    sendMessage({
+      type: 'connection_response',
+      payload: { 
+        requestId, 
+        accepted 
+      }
+    });
+  }, [sendMessage]);
+
+  return { 
+    sendConnectionRequest, 
+    respondToConnectionRequest 
+  };
 };
 
 // Call-related hooks

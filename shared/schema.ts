@@ -154,7 +154,8 @@ export type WSMessageType =
   | "call_request"
   | "call_response"
   | "connection_request"
-  | "connection_response";
+  | "connection_response"
+  | "chat_created";
 
 export interface WSMessage {
   type: WSMessageType;

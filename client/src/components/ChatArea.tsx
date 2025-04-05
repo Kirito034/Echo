@@ -18,6 +18,7 @@ import { User, Message, Chat } from '@shared/schema';
 import { format } from 'date-fns';
 import AttachmentModal from './ui/attachment-modal';
 import CallModal from './ui/call-modal';
+import { TypingIndicator, TypingIndicatorWithName } from './ui/typing-indicator';
 
 interface ChatAreaProps {
   selectedChat: Chat | null;
@@ -28,6 +29,8 @@ interface ChatAreaProps {
   onInitiateCall: (recipientId: number, callType: 'voice' | 'video') => void;
   onToggleSidebar: () => void;
   typingUsers: { [userId: number]: boolean };
+  onTypingStart?: (chatId: number) => void;
+  onTypingStop?: (chatId: number) => void;
 }
 
 const ChatArea: React.FC<ChatAreaProps> = ({ 
@@ -38,7 +41,9 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   onSendMessage,
   onInitiateCall,
   onToggleSidebar,
-  typingUsers
+  typingUsers,
+  onTypingStart,
+  onTypingStop
 }) => {
   const [messageInput, setMessageInput] = useState('');
   const [isAttachmentModalOpen, setIsAttachmentModalOpen] = useState(false);
@@ -64,10 +69,37 @@ const ChatArea: React.FC<ChatAreaProps> = ({
     }
   };
   
+  // For typing indicator
+  const [isTyping, setIsTyping] = useState(false);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
+    } else {
+      // Handle typing indicator
+      if (!isTyping && selectedChat) {
+        setIsTyping(true);
+        // Send typing indicator to server via websocket
+        if (onTypingStart) {
+          onTypingStart(selectedChat.id);
+        }
+      }
+      
+      // Reset the timeout
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      
+      // Set timeout to stop typing
+      typingTimeoutRef.current = setTimeout(() => {
+        setIsTyping(false);
+        // Send stop typing event
+        if (onTypingStop) {
+          onTypingStop(selectedChat?.id || 0);
+        }
+      }, 2000);
     }
   };
   
@@ -112,11 +144,14 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   // Group messages by date
   const messagesByDate: { [date: string]: Message[] } = {};
   messages.forEach(message => {
-    const date = format(new Date(message.sentAt), 'yyyy-MM-dd');
-    if (!messagesByDate[date]) {
-      messagesByDate[date] = [];
+    // Make sure there is a valid date before formatting
+    if (message.sentAt) {
+      const date = format(new Date(message.sentAt), 'yyyy-MM-dd');
+      if (!messagesByDate[date]) {
+        messagesByDate[date] = [];
+      }
+      messagesByDate[date].push(message);
     }
-    messagesByDate[date].push(message);
   });
   
   // Get typing users except current user
@@ -237,20 +272,25 @@ const ChatArea: React.FC<ChatAreaProps> = ({
             
             {/* Typing indicator */}
             {typingUsersList.length > 0 && (
-              <div className="flex items-end">
-                <AvatarWithStatus 
-                  src={typingUsersList[0].avatarUrl || ''} 
-                  alt={typingUsersList[0].displayName} 
-                  size="sm" 
-                  className="mr-2"
-                />
-                <div className="max-w-xs md:max-w-md bg-white dark:bg-gray-800 rounded-lg p-3 shadow-sm">
-                  <div className="flex space-x-1">
-                    <div className="h-2 w-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce"></div>
-                    <div className="h-2 w-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                    <div className="h-2 w-2 bg-gray-400 dark:bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
-                  </div>
-                </div>
+              <div className="flex items-end ml-10">
+                {typingUsersList.length === 1 ? (
+                  <TypingIndicatorWithName 
+                    isTyping={true} 
+                    name={typingUsersList[0].displayName} 
+                    characterType={typingUsersList[0].id % 5 === 0 ? "cat" : 
+                                  typingUsersList[0].id % 5 === 1 ? "rabbit" :
+                                  typingUsersList[0].id % 5 === 2 ? "bear" :
+                                  typingUsersList[0].id % 5 === 3 ? "panda" : "duck"}
+                    className="mb-2"
+                  />
+                ) : (
+                  <TypingIndicatorWithName 
+                    isTyping={true} 
+                    name={`${typingUsersList.length} people are`} 
+                    characterType="panda"
+                    className="mb-2"
+                  />
+                )}
               </div>
             )}
             

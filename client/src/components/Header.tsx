@@ -29,14 +29,19 @@ const Header: React.FC<HeaderProps> = ({ currentUser, onLogout }) => {
         <Button 
           variant="ghost" 
           size="icon" 
-          className="rounded-full" 
+          className="rounded-full relative overflow-hidden" 
           onClick={toggleTheme}
         >
-          {theme === 'dark' ? (
-            <Sun className="h-5 w-5" />
-          ) : (
-            <Moon className="h-5 w-5" />
-          )}
+          <div className="absolute inset-0 flex items-center justify-center transition-opacity duration-300 ease-in-out"
+              style={{ opacity: theme === 'dark' ? 1 : 0 }}>
+            <Sun className="h-5 w-5 transition-transform duration-300 ease-in-out" 
+                style={{ transform: theme === 'dark' ? 'rotate(0deg) scale(1)' : 'rotate(-90deg) scale(0.5)' }} />
+          </div>
+          <div className="absolute inset-0 flex items-center justify-center transition-opacity duration-300 ease-in-out"
+              style={{ opacity: theme === 'light' ? 1 : 0 }}>
+            <Moon className="h-5 w-5 transition-transform duration-300 ease-in-out" 
+                style={{ transform: theme === 'light' ? 'rotate(0deg) scale(1)' : 'rotate(90deg) scale(0.5)' }} />
+          </div>
         </Button>
         
         <Button 
