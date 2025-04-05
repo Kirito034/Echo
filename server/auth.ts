@@ -73,7 +73,7 @@ export function setupAuth(app: Express) {
 
   app.post("/api/register", async (req, res) => {
     try {
-      const { username, password, displayName, avatarUrl } = req.body;
+      const { username, email, password, displayName, avatarUrl } = req.body;
       
       // Check if user already exists
       const existingUser = await storage.getUserByUsername(username);
@@ -81,10 +81,19 @@ export function setupAuth(app: Express) {
         return res.status(400).json({ message: "Username already taken" });
       }
       
+      // Check if email already exists
+      if (storage.getUserByEmail) {
+        const existingEmail = await storage.getUserByEmail(email);
+        if (existingEmail) {
+          return res.status(400).json({ message: "Email already in use" });
+        }
+      }
+      
       // Hash password and create user
       const hashedPassword = await hashPassword(password);
       const user = await storage.createUser({
         username,
+        email,
         password: hashedPassword,
         displayName: displayName || username,
         status: "online",
