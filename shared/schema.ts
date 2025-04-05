@@ -27,6 +27,36 @@ export const insertUserSchema = createInsertSchema(users).pick({
   avatarUrl: true,
 });
 
+// Connection requests model
+export const connectionRequests = pgTable("connection_requests", {
+  id: serial("id").primaryKey(),
+  senderId: integer("sender_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  receiverId: integer("receiver_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("pending"), // pending, accepted, rejected
+  message: text("message"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const connectionRequestsRelations = relations(connectionRequests, ({ one }) => ({
+  sender: one(users, {
+    fields: [connectionRequests.senderId],
+    references: [users.id],
+    relationName: "sentRequests",
+  }),
+  receiver: one(users, {
+    fields: [connectionRequests.receiverId],
+    references: [users.id],
+    relationName: "receivedRequests",
+  }),
+}));
+
+export const insertConnectionRequestSchema = createInsertSchema(connectionRequests).pick({
+  senderId: true,
+  receiverId: true,
+  message: true,
+});
+
 // Chat model (conversation between users)
 export const chats = pgTable("chats", {
   id: serial("id").primaryKey(),
@@ -103,6 +133,9 @@ export const insertMessageSchema = createInsertSchema(messages).pick({
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
 
+export type ConnectionRequest = typeof connectionRequests.$inferSelect;
+export type InsertConnectionRequest = z.infer<typeof insertConnectionRequestSchema>;
+
 export type Chat = typeof chats.$inferSelect;
 export type InsertChat = z.infer<typeof insertChatSchema>;
 
@@ -119,7 +152,9 @@ export type WSMessageType =
   | "read"
   | "user_status"
   | "call_request"
-  | "call_response";
+  | "call_response"
+  | "connection_request"
+  | "connection_response";
 
 export interface WSMessage {
   type: WSMessageType;
@@ -130,6 +165,8 @@ export interface WSMessage {
 export const usersRelations = relations(users, ({ many }) => ({
   participatedChats: many(chatParticipants),
   sentMessages: many(messages, { relationName: "sender" }),
+  sentConnectionRequests: many(connectionRequests, { relationName: "sentRequests" }),
+  receivedConnectionRequests: many(connectionRequests, { relationName: "receivedRequests" }),
 }));
 
 export const chatsRelations = relations(chats, ({ many }) => ({

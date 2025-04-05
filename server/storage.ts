@@ -2,12 +2,13 @@ import {
   users, type User, type InsertUser,
   chats, type Chat, type InsertChat,
   chatParticipants, type ChatParticipant, type InsertChatParticipant,
-  messages, type Message, type InsertMessage
+  messages, type Message, type InsertMessage,
+  connectionRequests, type ConnectionRequest, type InsertConnectionRequest
 } from "@shared/schema";
 import session from "express-session";
 import { Store } from "express-session";
 import { db } from "./db";
-import { eq, and, asc, or, inArray } from "drizzle-orm";
+import { eq, and, asc, or, inArray, ne } from "drizzle-orm";
 import connectPg from "connect-pg-simple";
 import { pool } from "./db";
 import createMemoryStore from "memorystore";
@@ -26,6 +27,16 @@ export interface IStorage {
   createUser(user: InsertUser): Promise<User>;
   updateUserStatus(userId: number, status: string): Promise<User | undefined>;
   getAllUsers(): Promise<User[]>;
+  searchUsers(query: string, currentUserId: number): Promise<User[]>;
+  
+  // Connection request operations
+  createConnectionRequest(request: InsertConnectionRequest): Promise<ConnectionRequest>;
+  getConnectionRequest(id: number): Promise<ConnectionRequest | undefined>;
+  getConnectionRequestByUsers(senderId: number, receiverId: number): Promise<ConnectionRequest | undefined>;
+  getReceivedConnectionRequests(userId: number): Promise<(ConnectionRequest & { sender: User })[]>;
+  getSentConnectionRequests(userId: number): Promise<(ConnectionRequest & { receiver: User })[]>;
+  updateConnectionRequestStatus(requestId: number, status: string): Promise<ConnectionRequest | undefined>;
+  getConnectedUsers(userId: number): Promise<User[]>;
   
   // Chat operations
   getChat(id: number): Promise<Chat | undefined>;
@@ -87,6 +98,167 @@ export class DatabaseStorage implements IStorage {
 
   async getAllUsers(): Promise<User[]> {
     return await db.select().from(users);
+  }
+
+  async searchUsers(query: string, currentUserId: number): Promise<User[]> {
+    return await db
+      .select()
+      .from(users)
+      .where(
+        and(
+          ne(users.id, currentUserId),
+          or(
+            eq(users.username, query),
+            eq(users.email, query)
+          )
+        )
+      );
+  }
+
+  // Connection request methods
+  async createConnectionRequest(request: InsertConnectionRequest): Promise<ConnectionRequest> {
+    const [newRequest] = await db
+      .insert(connectionRequests)
+      .values(request)
+      .returning();
+    return newRequest;
+  }
+
+  async getConnectionRequest(id: number): Promise<ConnectionRequest | undefined> {
+    const [request] = await db
+      .select()
+      .from(connectionRequests)
+      .where(eq(connectionRequests.id, id));
+    return request;
+  }
+
+  async getConnectionRequestByUsers(senderId: number, receiverId: number): Promise<ConnectionRequest | undefined> {
+    const [request] = await db
+      .select()
+      .from(connectionRequests)
+      .where(
+        and(
+          eq(connectionRequests.senderId, senderId),
+          eq(connectionRequests.receiverId, receiverId)
+        )
+      );
+    return request;
+  }
+
+  async getReceivedConnectionRequests(userId: number): Promise<(ConnectionRequest & { sender: User })[]> {
+    const requests = await db
+      .select()
+      .from(connectionRequests)
+      .where(
+        and(
+          eq(connectionRequests.receiverId, userId),
+          eq(connectionRequests.status, "pending")
+        )
+      );
+
+    // If no requests, return empty array
+    if (requests.length === 0) {
+      return [];
+    }
+
+    // Get senders for each request
+    const result = [];
+    for (const request of requests) {
+      const [sender] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, request.senderId));
+      
+      if (sender) {
+        result.push({
+          ...request,
+          sender
+        });
+      }
+    }
+
+    return result;
+  }
+
+  async getSentConnectionRequests(userId: number): Promise<(ConnectionRequest & { receiver: User })[]> {
+    const requests = await db
+      .select()
+      .from(connectionRequests)
+      .where(eq(connectionRequests.senderId, userId));
+
+    // If no requests, return empty array
+    if (requests.length === 0) {
+      return [];
+    }
+
+    // Get receivers for each request
+    const result = [];
+    for (const request of requests) {
+      const [receiver] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, request.receiverId));
+      
+      if (receiver) {
+        result.push({
+          ...request,
+          receiver
+        });
+      }
+    }
+
+    return result;
+  }
+
+  async updateConnectionRequestStatus(requestId: number, status: string): Promise<ConnectionRequest | undefined> {
+    const [updatedRequest] = await db
+      .update(connectionRequests)
+      .set({ 
+        status, 
+        updatedAt: new Date() 
+      })
+      .where(eq(connectionRequests.id, requestId))
+      .returning();
+    return updatedRequest;
+  }
+
+  async getConnectedUsers(userId: number): Promise<User[]> {
+    // Get user IDs who have accepted connection requests with the current user
+    const acceptedRequestsAsSender = await db
+      .select({ otherUserId: connectionRequests.receiverId })
+      .from(connectionRequests)
+      .where(
+        and(
+          eq(connectionRequests.senderId, userId),
+          eq(connectionRequests.status, "accepted")
+        )
+      );
+
+    const acceptedRequestsAsReceiver = await db
+      .select({ otherUserId: connectionRequests.senderId })
+      .from(connectionRequests)
+      .where(
+        and(
+          eq(connectionRequests.receiverId, userId),
+          eq(connectionRequests.status, "accepted")
+        )
+      );
+
+    // Combine the two sets of user IDs
+    const connectedUserIds = [
+      ...acceptedRequestsAsSender.map(r => r.otherUserId),
+      ...acceptedRequestsAsReceiver.map(r => r.otherUserId)
+    ];
+
+    if (connectedUserIds.length === 0) {
+      return [];
+    }
+
+    // Get user details for the connected users
+    return await db
+      .select()
+      .from(users)
+      .where(inArray(users.id, connectedUserIds));
   }
 
   async getChat(id: number): Promise<Chat | undefined> {
