@@ -2,6 +2,7 @@ import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
+import { setupAuth } from "./auth";
 import { 
   insertUserSchema, 
   insertChatSchema, 
@@ -16,6 +17,9 @@ import { ZodError } from "zod";
 const connectedClients = new Map<number, WebSocket>();
 
 export async function registerRoutes(app: Express): Promise<Server> {
+  // Setup authentication
+  setupAuth(app);
+  
   const httpServer = createServer(app);
 
   // WebSocket server setup
@@ -201,25 +205,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
   }
 
   // API Routes
-  app.get('/api/users/current', async (req, res) => {
-    // In a real app, this would use authentication
-    // For demo, return the last user (current user)
-    const users = await storage.getAllUsers();
-    const currentUser = users[users.length - 1];
-    
-    if (currentUser) {
-      res.json(currentUser);
-    } else {
-      res.status(404).json({ message: 'User not found' });
+  // Current user route is handled by the auth system
+  
+  // Middleware to check if user is authenticated
+  const isAuthenticated = (req: Request, res: Response, next: Function) => {
+    if (req.isAuthenticated()) {
+      return next();
     }
-  });
+    res.status(401).json({ message: 'Unauthorized' });
+  };
 
-  app.get('/api/users', async (_req, res) => {
+  app.get('/api/users', isAuthenticated, async (_req, res) => {
     const users = await storage.getAllUsers();
     res.json(users);
   });
 
-  app.get('/api/users/:id', async (req, res) => {
+  app.get('/api/users/:id', isAuthenticated, async (req, res) => {
     const userId = parseInt(req.params.id);
     if (isNaN(userId)) {
       return res.status(400).json({ message: 'Invalid user ID' });
@@ -247,7 +248,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/chats', async (req, res) => {
+  app.get('/api/chats', isAuthenticated, async (req, res) => {
     const userId = req.query.userId ? parseInt(req.query.userId as string) : undefined;
     
     if (!userId) {
@@ -272,7 +273,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(enhancedChats);
   });
 
-  app.post('/api/chats', async (req, res) => {
+  app.post('/api/chats', isAuthenticated, async (req, res) => {
     try {
       const chatData = insertChatSchema.parse(req.body);
       const newChat = await storage.createChat(chatData);
@@ -297,7 +298,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/chats/:id', async (req, res) => {
+  app.get('/api/chats/:id', isAuthenticated, async (req, res) => {
     const chatId = parseInt(req.params.id);
     if (isNaN(chatId)) {
       return res.status(400).json({ message: 'Invalid chat ID' });
@@ -316,7 +317,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
   });
 
-  app.post('/api/chats/:id/pin', async (req, res) => {
+  app.post('/api/chats/:id/pin', isAuthenticated, async (req, res) => {
     const chatId = parseInt(req.params.id);
     if (isNaN(chatId)) {
       return res.status(400).json({ message: 'Invalid chat ID' });
@@ -332,7 +333,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.get('/api/chats/:id/messages', async (req, res) => {
+  app.get('/api/chats/:id/messages', isAuthenticated, async (req, res) => {
     const chatId = parseInt(req.params.id);
     if (isNaN(chatId)) {
       return res.status(400).json({ message: 'Invalid chat ID' });
@@ -342,7 +343,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     res.json(messages);
   });
 
-  app.post('/api/messages', async (req, res) => {
+  app.post('/api/messages', isAuthenticated, async (req, res) => {
     try {
       const messageData = insertMessageSchema.parse(req.body);
       const newMessage = await storage.createMessage(messageData);

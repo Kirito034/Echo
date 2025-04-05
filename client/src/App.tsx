@@ -5,11 +5,15 @@ import { Toaster } from "@/components/ui/toaster";
 import NotFound from "@/pages/not-found";
 import { ThemeProvider } from "@/lib/theme";
 import ChatPage from "@/pages/Chat";
+import AuthPage from "@/pages/auth-page";
+import { AuthProvider } from "@/hooks/use-auth";
+import { ProtectedRoute } from "./lib/protected-route";
 
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={ChatPage} />
+      <ProtectedRoute path="/" component={ChatPage} />
+      <Route path="/auth" component={AuthPage} />
       <Route component={NotFound} />
     </Switch>
   );
@@ -19,8 +23,10 @@ function App() {
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
-        <Router />
-        <Toaster />
+        <AuthProvider>
+          <Router />
+          <Toaster />
+        </AuthProvider>
       </QueryClientProvider>
     </ThemeProvider>
   );
