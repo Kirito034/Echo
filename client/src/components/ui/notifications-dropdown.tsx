@@ -34,7 +34,8 @@ export function NotificationsDropdown({ userId, onNewConnectionAccepted }: Notif
       }
       return res.json();
     },
-    refetchInterval: 10000, // Refetch every 10 seconds in the background
+    // Removed automatic refetch interval to prevent duplicate requests
+    // Socket notifications will trigger invalidation instead
   });
 
   // Accept connection request mutation

@@ -1,92 +1,158 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { WSMessage } from '@shared/schema';
 
+// Create a singleton WebSocket instance
+let socketInstance: WebSocket | null = null;
+let isSocketConnecting = false;
+const messageListeners: ((message: WSMessage) => void)[] = [];
+
 // Create a WebSocket instance
 const createWebSocket = () => {
+  if (socketInstance && (socketInstance.readyState === WebSocket.OPEN || socketInstance.readyState === WebSocket.CONNECTING)) {
+    return socketInstance;
+  }
+  
+  if (isSocketConnecting) {
+    return null;
+  }
+  
+  isSocketConnecting = true;
+  
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${protocol}//${window.location.host}/ws`;
-  return new WebSocket(wsUrl);
+  
+  socketInstance = new WebSocket(wsUrl);
+  
+  socketInstance.onopen = () => {
+    console.log('WebSocket connected');
+    isSocketConnecting = false;
+    
+    // Notify all components that the connection is established
+    document.dispatchEvent(new CustomEvent('ws-connected'));
+  };
+  
+  socketInstance.onclose = () => {
+    console.log('WebSocket disconnected');
+    isSocketConnecting = false;
+    socketInstance = null;
+    
+    // Notify all components that the connection is closed
+    document.dispatchEvent(new CustomEvent('ws-disconnected'));
+    
+    // Attempt to reconnect after a delay
+    setTimeout(() => {
+      createWebSocket();
+    }, 3000);
+  };
+  
+  socketInstance.onerror = (error) => {
+    console.error('WebSocket error:', error);
+    isSocketConnecting = false;
+    
+    // Notify all components of the error
+    document.dispatchEvent(new CustomEvent('ws-error', { detail: error }));
+  };
+  
+  socketInstance.onmessage = (event) => {
+    try {
+      const message = JSON.parse(event.data) as WSMessage;
+      // Notify all registered message listeners
+      messageListeners.forEach(listener => listener(message));
+    } catch (error) {
+      console.error('Error parsing WebSocket message:', error);
+    }
+  };
+  
+  return socketInstance;
 };
 
 // Socket state management
 export const useSocket = (userId: number | null) => {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
   const messageListenersRef = useRef<((message: WSMessage) => void)[]>([]);
 
   // Initialize WebSocket connection
   useEffect(() => {
     if (!userId) return;
 
+    // Create or get the socket instance
     const socket = createWebSocket();
-    socketRef.current = socket;
     
-    socket.onopen = () => {
-      console.log('WebSocket connected');
+    // Set connection status based on current socket state
+    if (socket?.readyState === WebSocket.OPEN) {
       setIsConnected(true);
       setError(null);
       
-      // Send user status once connected
+      // Send user status since we're already connected
       socket.send(JSON.stringify({
         type: 'user_status',
         payload: { userId }
       }));
-    };
+    }
     
-    socket.onclose = () => {
-      console.log('WebSocket disconnected');
-      setIsConnected(false);
+    // Setup event listeners for connection status changes
+    const handleConnected = () => {
+      setIsConnected(true);
+      setError(null);
       
-      // Attempt to reconnect after a delay
-      setTimeout(() => {
-        if (socketRef.current?.readyState !== WebSocket.OPEN) {
-          console.log('Attempting to reconnect WebSocket...');
-          socketRef.current = createWebSocket();
-        }
-      }, 3000);
-    };
-    
-    socket.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setError('Failed to connect to chat server');
-    };
-    
-    socket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data) as WSMessage;
-        // Notify all registered message listeners
-        messageListenersRef.current.forEach(listener => listener(message));
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+      // Send user status once connected
+      if (socketInstance?.readyState === WebSocket.OPEN) {
+        socketInstance.send(JSON.stringify({
+          type: 'user_status',
+          payload: { userId }
+        }));
       }
     };
     
+    const handleDisconnected = () => {
+      setIsConnected(false);
+    };
+    
+    const handleError = (e: CustomEvent) => {
+      setError('Failed to connect to chat server');
+    };
+    
+    // Register document event listeners
+    document.addEventListener('ws-connected', handleConnected);
+    document.addEventListener('ws-disconnected', handleDisconnected);
+    document.addEventListener('ws-error', handleError as EventListener);
+    
     // Cleanup on unmount
     return () => {
-      console.log('Closing WebSocket connection');
-      socket.close();
+      document.removeEventListener('ws-connected', handleConnected);
+      document.removeEventListener('ws-disconnected', handleDisconnected);
+      document.removeEventListener('ws-error', handleError as EventListener);
     };
   }, [userId]);
 
   // Add message listener
   const addMessageListener = useCallback((listener: (message: WSMessage) => void) => {
+    // Add to local ref
     messageListenersRef.current.push(listener);
+    // Add to global listeners
+    messageListeners.push(listener);
+    
+    // Return cleanup function
     return () => {
       messageListenersRef.current = messageListenersRef.current.filter(l => l !== listener);
+      const index = messageListeners.indexOf(listener);
+      if (index !== -1) {
+        messageListeners.splice(index, 1);
+      }
     };
   }, []);
 
   // Send message to server
   const sendMessage = useCallback((message: WSMessage) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(JSON.stringify(message));
+    if (socketInstance?.readyState === WebSocket.OPEN) {
+      socketInstance.send(JSON.stringify(message));
     } else {
       setError('Connection to chat server lost. Attempting to reconnect...');
       
       // Attempt to reconnect
-      if (socketRef.current?.readyState !== WebSocket.CONNECTING) {
-        socketRef.current = createWebSocket();
+      if (!isSocketConnecting) {
+        createWebSocket();
       }
     }
   }, []);

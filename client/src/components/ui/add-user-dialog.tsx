@@ -110,6 +110,22 @@ export function AddUserDialog({ trigger, onUserAdded, addMessageListener, sendMe
 
   const { mutate: sendConnectionRequest, isPending: isSendingRequest } = useMutation({
     mutationFn: async ({ receiverId, message }: { receiverId: number; message?: string }) => {
+      // Check for existing connection requests or connections first
+      try {
+        const checkResponse = await fetch(`/api/connection-requests/check/${receiverId}`);
+        if (checkResponse.ok) {
+          const existingRequest = await checkResponse.json();
+          if (existingRequest) {
+            // Connection or request already exists
+            throw new Error('Connection request already exists');
+          }
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('already exists')) {
+          throw { status: 400, data: { message: 'Connection request already exists' } };
+        }
+      }
+      
       // Send connection request via HTTP API only
       // WebSocket notification will be triggered on the server after DB insert
       return apiRequest('POST', '/api/connection-requests', {

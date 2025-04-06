@@ -328,6 +328,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Connection requests endpoints
+  
+  // Check if a connection request already exists
+  app.get('/api/connection-requests/check/:receiverId', isAuthenticated, async (req, res) => {
+    try {
+      const currentUser = req.user as User;
+      const receiverId = parseInt(req.params.receiverId);
+      
+      if (isNaN(receiverId)) {
+        return res.status(400).json({ message: 'Invalid receiver ID' });
+      }
+      
+      // Check for existing connection request in either direction
+      const existingRequest = await storage.getConnectionRequestByUsers(
+        currentUser.id,
+        receiverId
+      );
+      
+      // Also check in reverse direction
+      const reverseRequest = await storage.getConnectionRequestByUsers(
+        receiverId,
+        currentUser.id
+      );
+      
+      if (existingRequest || reverseRequest) {
+        return res.json(existingRequest || reverseRequest);
+      }
+      
+      // No existing request found
+      return res.json(null);
+    } catch (error) {
+      console.error('Error checking connection request:', error);
+      res.status(500).json({ message: 'Failed to check for existing connection request' });
+    }
+  });
+  
   app.post('/api/connection-requests', isAuthenticated, async (req, res) => {
     try {
       const currentUser = req.user as User;
