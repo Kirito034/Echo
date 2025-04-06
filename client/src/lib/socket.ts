@@ -259,13 +259,21 @@ export const useMessageListener = (
   onUserStatusChange?: (userId: number, status: string) => void,
   onConnectionRequest?: (request: any) => void,
   onConnectionResponse?: (requestId: number, accepted: boolean, responder: any) => void,
-  onChatCreated?: (chat: any) => void
+  onChatCreated?: (chat: any) => void,
+  onMessageSent?: (messageId: number, status: string) => void
 ) => {
   useEffect(() => {
     const removeListener = addMessageListener((message: WSMessage) => {
       switch (message.type) {
         case 'message':
+          console.log('Received new message from WebSocket:', message.payload.message);
           onNewMessage?.(message.payload.message);
+          break;
+        case 'message_sent':
+          if (message.payload.messageId && message.payload.status) {
+            console.log(`Message ${message.payload.messageId} status: ${message.payload.status}`);
+            onMessageSent?.(message.payload.messageId, message.payload.status);
+          }
           break;
         case 'typing':
           if (message.payload.userId && message.payload.chatId) {
@@ -275,16 +283,20 @@ export const useMessageListener = (
           break;
         case 'read':
           if (message.payload.messageId) {
+            const status = message.payload.status || 'read';
             onReadReceipt?.(message.payload.messageId);
+            console.log(`Message ${message.payload.messageId} marked as ${status}`);
           }
           break;
         case 'user_status':
           if (message.payload.userId && message.payload.status) {
+            console.log(`User ${message.payload.userId} status changed to ${message.payload.status}`);
             onUserStatusChange?.(message.payload.userId, message.payload.status);
           }
           break;
         case 'connection_request':
           if (message.payload.request) {
+            console.log('Received connection request:', message.payload.request);
             onConnectionRequest?.(message.payload.request);
           }
           break;
@@ -292,6 +304,7 @@ export const useMessageListener = (
           if (message.payload.requestId !== undefined && 
               message.payload.accepted !== undefined && 
               message.payload.responder) {
+            console.log(`Connection response for request ${message.payload.requestId}: ${message.payload.accepted ? 'accepted' : 'rejected'}`);
             onConnectionResponse?.(
               message.payload.requestId, 
               message.payload.accepted, 
@@ -301,8 +314,12 @@ export const useMessageListener = (
           break;
         case 'chat_created':
           if (message.payload.chat) {
+            console.log('New chat created:', message.payload.chat);
             onChatCreated?.(message.payload.chat);
           }
+          break;
+        case 'error':
+          console.error('WebSocket error message:', message.payload);
           break;
       }
     });
@@ -316,7 +333,8 @@ export const useMessageListener = (
     onUserStatusChange,
     onConnectionRequest,
     onConnectionResponse,
-    onChatCreated
+    onChatCreated,
+    onMessageSent
   ]);
 };
 

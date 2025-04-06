@@ -51,9 +51,36 @@ const ChatPage: React.FC = () => {
     addMessageListener,
     (message) => {
       // On new message received
-      queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
+      console.log('Message received in Chat.tsx:', message);
+      
+      // Immediately update the messages list if the chat is currently selected
       if (selectedChatId === message.chatId) {
-        queryClient.invalidateQueries({ queryKey: ['/api/chats', selectedChatId, 'messages'] });
+        console.log('Updating current chat messages');
+        
+        // Add the message to the current messages list
+        queryClient.setQueryData<Message[]>(
+          ['/api/chats', message.chatId, 'messages'],
+          (oldMessages = []) => {
+            // Check if message already exists in the list
+            const messageExists = oldMessages.some(m => m.id === message.id);
+            if (messageExists) {
+              return oldMessages;
+            }
+            return [...oldMessages, message];
+          }
+        );
+      }
+      
+      // Also update the chats list to show latest message
+      queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
+      
+      // If it's a message from a different chat, indicate it as new message
+      if (selectedChatId !== message.chatId) {
+        toast({
+          title: 'New message',
+          description: `You have a new message in a different chat`,
+          duration: 3000,
+        });
       }
     },
     (userId, chatId) => {
@@ -69,10 +96,22 @@ const ChatPage: React.FC = () => {
     },
     (messageId) => {
       // On read receipt
-      queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
+      console.log(`Message marked as read: ${messageId}`);
+      
+      // Update the specific message status in the cache
       if (selectedChatId) {
-        queryClient.invalidateQueries({ queryKey: ['/api/chats', selectedChatId, 'messages'] });
+        queryClient.setQueryData(
+          ['/api/chats', selectedChatId, 'messages'],
+          (oldMessages: any[] = []) => {
+            return oldMessages.map(msg => 
+              msg.id === messageId ? { ...msg, status: 'read', isRead: true } : msg
+            );
+          }
+        );
       }
+      
+      // Refresh chat list to update unread counts
+      queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
     },
     (userId, status) => {
       // On user status change
@@ -109,6 +148,39 @@ const ChatPage: React.FC = () => {
         title: 'New chat created',
         description: 'You can now start messaging',
       });
+    },
+    // Message sent confirmation
+    (messageId, status) => {
+      console.log(`Message ${messageId} status: ${status}`);
+      
+      if (selectedChatId) {
+        // Find and update the message in the current chat
+        queryClient.setQueryData<Message[]>(
+          ['/api/chats', selectedChatId, 'messages'],
+          (oldMessages = []) => {
+            return oldMessages.map(msg => {
+              // Match either by ID or find temporary messages with high timestamps
+              const isTargetMessage = 
+                msg.id === messageId || 
+                (status === 'sent' && typeof msg.id === 'number' && msg.id > Date.now() - 10000);
+                
+              if (isTargetMessage) {
+                return { 
+                  ...msg, 
+                  id: messageId, // Ensure we have the real ID from server
+                  status
+                };
+              }
+              return msg;
+            });
+          }
+        );
+        
+        // Also update the chat list to show the latest message status
+        if (status === 'delivered' || status === 'read') {
+          queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
+        }
+      }
     }
   );
   
@@ -189,7 +261,8 @@ const ChatPage: React.FC = () => {
           mediaUrl: mediaUrl || null,
           mediaType: mediaType || null,
           isRead: false,
-          sentAt: new Date()
+          sentAt: new Date(),
+          status: 'sending' // Initial status before it's confirmed by the server
         };
         
         return [...oldMessages, newMessage];
@@ -208,7 +281,8 @@ const ChatPage: React.FC = () => {
           senderId: currentUser.id,
           content,
           mediaUrl,
-          mediaType
+          mediaType,
+          status: 'sent'
         }
       }
     });

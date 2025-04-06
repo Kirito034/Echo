@@ -106,6 +106,7 @@ export const messages = pgTable("messages", {
   mediaType: text("media_type"), // Type of media: image, file, voice
   isRead: boolean("is_read").default(false),
   sentAt: timestamp("sent_at").defaultNow(),
+  status: text("status").default("sent"), // possible values: sent, delivered, read
 });
 
 // Message relations
@@ -127,6 +128,7 @@ export const insertMessageSchema = createInsertSchema(messages).pick({
   content: true,
   mediaUrl: true,
   mediaType: true,
+  status: true,
 });
 
 // Types
@@ -148,6 +150,7 @@ export type InsertMessage = z.infer<typeof insertMessageSchema>;
 // WebSocket message types
 export type WSMessageType = 
   | "message" 
+  | "message_sent"
   | "typing"
   | "read"
   | "user_status"
@@ -155,7 +158,9 @@ export type WSMessageType =
   | "call_response"
   | "connection_request"
   | "connection_response"
-  | "chat_created";
+  | "chat_created"
+  | "error"
+  | "notification";
 
 export interface WSMessage {
   type: WSMessageType;

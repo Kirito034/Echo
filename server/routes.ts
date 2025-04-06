@@ -3,12 +3,15 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { setupAuth } from "./auth";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 import { 
   insertUserSchema, 
   insertChatSchema, 
   insertChatParticipantSchema, 
   insertMessageSchema,
   insertConnectionRequestSchema,
+  messages,
   type WSMessage,
   type User,
   type ConnectionRequest
@@ -32,16 +35,35 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.log('Client connected to WebSocket');
     let userId: number | null = null;
 
+    // Heartbeat to keep connection alive
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30000);
+
     ws.on('message', async (message: string) => {
       try {
         const data = JSON.parse(message) as WSMessage;
+        console.log(`WebSocket message received: ${data.type}`, data.payload);
         
         switch (data.type) {
           case 'user_status':
             // Associate this connection with a user ID
             userId = data.payload.userId;
             if (userId) {
+              // Check if user already has a connection
+              const existingConnection = connectedClients.get(userId);
+              if (existingConnection && existingConnection !== ws) {
+                console.log(`User ${userId} already has a connection. Closing old connection.`);
+                existingConnection.close();
+              }
+              
+              // Register new connection
               connectedClients.set(userId, ws);
+              console.log(`User ${userId} registered with WebSocket. Total connected: ${connectedClients.size}`);
+              
+              // Update user status to online
               await storage.updateUserStatus(userId, 'online');
               
               // Broadcast user status change to all connected clients
@@ -53,27 +75,70 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Handle new message
             if (userId && data.payload.message) {
               try {
+                console.log(`Processing message from user ${userId} to chat ${data.payload.message.chatId}`);
                 const validMessage = insertMessageSchema.parse(data.payload.message);
                 const savedMessage = await storage.createMessage(validMessage);
                 
+                console.log(`Message saved to database, id: ${savedMessage.id}, chatId: ${savedMessage.chatId}`);
+                
                 // Get chat participants to notify
                 const participants = await storage.getChatParticipants(savedMessage.chatId);
+                console.log(`Chat ${savedMessage.chatId} has ${participants.length} participants`);
                 
                 // Send the message to all participants in the chat
+                let notifiedCount = 0;
                 participants.forEach(participant => {
                   if (participant.id !== userId && isUserConnected(participant.id)) {
                     const client = connectedClients.get(participant.id);
-                    client?.send(JSON.stringify({
-                      type: 'message',
-                      payload: { message: savedMessage }
-                    }));
+                    if (client && client.readyState === WebSocket.OPEN) {
+                      client.send(JSON.stringify({
+                        type: 'message',
+                        payload: { message: savedMessage }
+                      }));
+                      notifiedCount++;
+                      console.log(`Sent message to participant ${participant.id}`);
+                    } else {
+                      console.log(`Participant ${participant.id} is not connected or WebSocket not open`);
+                    }
                   }
                 });
+                
+                console.log(`Notified ${notifiedCount} participants about new message`);
+                
+                // Update message status to delivered if there are recipients online
+                let messageStatus = 'sent';
+                if (participants.some(p => p.id !== userId && isUserConnected(p.id))) {
+                  messageStatus = 'delivered';
+                  
+                  // Update message status in database
+                  await db
+                    .update(messages)
+                    .set({ status: messageStatus })
+                    .where(eq(messages.id, savedMessage.id));
+                    
+                  // Update the savedMessage object
+                  savedMessage.status = messageStatus;
+                }
+                
+                // Confirm receipt to sender
+                ws.send(JSON.stringify({
+                  type: 'message_sent',
+                  payload: { 
+                    messageId: savedMessage.id,
+                    status: messageStatus
+                  }
+                }));
               } catch (error) {
+                console.error('Error processing message:', error);
                 if (error instanceof ZodError) {
                   ws.send(JSON.stringify({ 
                     type: 'error', 
                     payload: { message: 'Invalid message format', details: error.format() } 
+                  }));
+                } else {
+                  ws.send(JSON.stringify({ 
+                    type: 'error', 
+                    payload: { message: 'Failed to process message' } 
                   }));
                 }
               }
@@ -106,13 +171,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const updatedMessage = await storage.markMessageAsRead(messageId);
               
               if (updatedMessage) {
+                // Update message status to read
+                await db
+                  .update(messages)
+                  .set({ status: 'read' })
+                  .where(eq(messages.id, messageId));
+                
+                console.log(`WebSocket: Updated message ${messageId} status to 'read'`);
+                
                 // Get the sender to notify them that their message was read
                 const sender = await storage.getUser(updatedMessage.senderId);
                 if (sender && isUserConnected(sender.id)) {
                   const client = connectedClients.get(sender.id);
                   client?.send(JSON.stringify({
                     type: 'read',
-                    payload: { messageId }
+                    payload: { messageId, status: 'read' }
                   }));
                 }
               }
@@ -223,13 +296,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     ws.on('close', async () => {
       console.log('Client disconnected from WebSocket');
       
+      // Clear the ping interval
+      clearInterval(pingInterval);
+      
       // Update user status to offline
       if (userId) {
+        console.log(`User ${userId} disconnected from WebSocket`);
         await storage.updateUserStatus(userId, 'offline');
         connectedClients.delete(userId);
         
         // Broadcast user status change to all connected clients
         broadcastUserStatus(userId, 'offline');
+        console.log(`Broadcasted 'offline' status for user ${userId}`);
       }
     });
   });
@@ -671,10 +749,66 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   app.post('/api/messages', isAuthenticated, async (req, res) => {
     try {
-      const messageData = insertMessageSchema.parse(req.body);
-      const newMessage = await storage.createMessage(messageData);
+      const currentUser = req.user as User;
+      
+      // Ensure the sender ID matches the authenticated user
+      const messageData = {
+        ...req.body,
+        senderId: currentUser.id
+      };
+      
+      const validMessage = insertMessageSchema.parse(messageData);
+      const newMessage = await storage.createMessage(validMessage);
+      
+      console.log(`HTTP endpoint: Message saved to database, id: ${newMessage.id}, chatId: ${newMessage.chatId}`);
+      
+      // Get chat participants to notify via WebSocket
+      const participants = await storage.getChatParticipants(newMessage.chatId);
+      console.log(`HTTP endpoint: Chat ${newMessage.chatId} has ${participants.length} participants`);
+      
+      // Update message status to delivered if there are connected recipients
+      let messageStatus = 'sent';
+      let shouldUpdateStatus = false;
+      
+      // Check if any recipients are online to update status to 'delivered'
+      if (participants.some(p => p.id !== currentUser.id && isUserConnected(p.id))) {
+        messageStatus = 'delivered';
+        shouldUpdateStatus = true;
+      }
+      
+      // Update message status in database if needed
+      if (shouldUpdateStatus) {
+        await db
+          .update(messages)
+          .set({ status: messageStatus })
+          .where(eq(messages.id, newMessage.id));
+        
+        // Update the message object to be sent to clients
+        newMessage.status = messageStatus;
+        console.log(`HTTP endpoint: Updated message ${newMessage.id} status to ${messageStatus}`);
+      }
+      
+      // Send the message to all participants in the chat via WebSocket
+      let notifiedCount = 0;
+      participants.forEach(participant => {
+        if (participant.id !== currentUser.id && isUserConnected(participant.id)) {
+          const client = connectedClients.get(participant.id);
+          if (client && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({
+              type: 'message',
+              payload: { message: newMessage }
+            }));
+            notifiedCount++;
+            console.log(`HTTP endpoint: Sent message to participant ${participant.id}`);
+          }
+        }
+      });
+      
+      console.log(`HTTP endpoint: Notified ${notifiedCount} participants about new message. Status: ${messageStatus}`);
+      
       res.status(201).json(newMessage);
     } catch (error) {
+      console.error('Error creating message via HTTP:', error);
       if (error instanceof ZodError) {
         res.status(400).json({ message: 'Invalid message data', details: error.format() });
       } else {

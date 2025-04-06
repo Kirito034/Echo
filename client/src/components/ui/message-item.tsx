@@ -1,9 +1,10 @@
 import React from 'react';
 import { format } from 'date-fns';
-import { Check, CheckCheck } from 'lucide-react';
+import { Check, CheckCheck, Clock, AlertCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Message, User } from '@shared/schema';
 import VoiceMessage from './voice-message';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface MessageItemProps {
   message: Message;
@@ -18,13 +19,93 @@ const MessageItem: React.FC<MessageItemProps> = ({
   sender,
   showAvatar = true
 }) => {
-  const isRead = message.isRead;
   const hasMedia = message.mediaUrl && message.mediaType;
   const isImage = message.mediaType === 'image';
   const isVoice = message.mediaType === 'voice';
   
   // Format timestamp
-  const timestamp = format(new Date(message.sentAt), 'h:mm a');
+  const messageDate = message.sentAt ? 
+    (typeof message.sentAt === 'string' ? new Date(message.sentAt) : message.sentAt) : 
+    new Date();
+  const timestamp = format(messageDate, 'h:mm a');
+
+  // Get message status
+  const status = message.status || (message.isRead ? 'read' : 'sent');
+  
+  // Render appropriate status icon
+  const renderStatusIcon = () => {
+    if (!isSender) return null;
+    
+    switch (status) {
+      case 'sending':
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger>
+                <Clock className="h-3 w-3 text-gray-400" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Sending</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      case 'sent':
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger>
+                <Check className="h-3 w-3 text-gray-400" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Sent</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      case 'delivered':
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger>
+                <CheckCheck className="h-3 w-3 text-blue-500" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Delivered</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      case 'read':
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger>
+                <CheckCheck className="h-3 w-3 text-green-500" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Read</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      case 'error':
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger>
+                <AlertCircle className="h-3 w-3 text-red-500" />
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Failed to send</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        );
+      default:
+        return <Check className="h-3 w-3 text-gray-400" />;
+    }
+  };
   
   return (
     <div className={cn(
@@ -77,11 +158,7 @@ const MessageItem: React.FC<MessageItemProps> = ({
       
       {isSender && (
         <div className="text-xs self-end">
-          {isRead ? (
-            <CheckCheck className="h-3 w-3 text-green-500" />
-          ) : (
-            <Check className="h-3 w-3 text-gray-400" />
-          )}
+          {renderStatusIcon()}
         </div>
       )}
       
