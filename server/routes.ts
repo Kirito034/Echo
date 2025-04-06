@@ -166,204 +166,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
             break;
 
           case 'connection_request':
-            // Handle connection requests
-            if (userId && data.payload.receiverId) {
-              const receiverId = data.payload.receiverId;
-              const message = data.payload.message || '';
-              
-              // Create connection request in database
-              try {
-                const connectionRequest = await storage.createConnectionRequest({
-                  senderId: userId,
-                  receiverId,
-                  message
-                });
-                
-                // Get the sender information
-                const sender = await storage.getUser(userId);
-                
-                if (sender) {
-                  // Log for debugging
-                  console.log(`Sending connection request notification to user ${receiverId}`);
-                  
-                  // Prepare the full request object with sender info
-                  const fullRequest = {
-                    ...connectionRequest,
-                    sender: {
-                      id: sender.id,
-                      username: sender.username,
-                      email: sender.email,
-                      displayName: sender.displayName,
-                      avatarUrl: sender.avatarUrl,
-                      status: sender.status
-                    }
-                  };
-                  
-                  // Notify receiver if they're online
-                  if (isUserConnected(receiverId)) {
-                    const client = connectedClients.get(receiverId);
-                    
-                    client?.send(JSON.stringify({
-                      type: 'connection_request',
-                      payload: {
-                        request: fullRequest
-                      }
-                    }));
-                    
-                    // Acknowledge successful delivery to sender
-                    ws.send(JSON.stringify({
-                      type: 'notification',
-                      payload: { message: 'Connection request sent successfully' }
-                    }));
-                  } else {
-                    // Receiver is offline, store notification for later
-                    console.log(`User ${receiverId} is offline, connection request saved for later`);
-                    
-                    // Acknowledge to sender
-                    ws.send(JSON.stringify({
-                      type: 'notification',
-                      payload: { message: 'Connection request sent (user is offline)' }
-                    }));
-                  }
-                }
-              } catch (error) {
-                console.error('Error creating connection request:', error);
-                ws.send(JSON.stringify({
-                  type: 'error',
-                  payload: { message: 'Failed to create connection request' }
-                }));
-              }
-            }
+            // We now handle this in the HTTP API endpoint, so this WebSocket handler
+            // is only for handling direct WebSocket connection requests
+            // This case is now deprecated and should be removed in future updates
+            console.log('Deprecated: Received connection_request via WebSocket. This should use the HTTP API instead.');
             break;
             
           case 'connection_response':
-            // Handle connection request responses
+            // We now handle this in the HTTP API endpoint
+            // This case is now deprecated and should be removed in future updates
+            console.log('Deprecated: Received connection_response via WebSocket. Use the HTTP PATCH endpoint instead.');
+            
+            // Automatically redirect to HTTP API
             if (userId && data.payload.requestId && data.payload.accepted !== undefined) {
-              const requestId = data.payload.requestId;
-              const accepted = data.payload.accepted;
-              
-              console.log(`Processing connection response: Request ID ${requestId}, Accepted: ${accepted}`);
-              
               try {
-                // Update connection request in database
-                const request = await storage.updateConnectionRequestStatus(
-                  requestId, 
-                  accepted ? 'accepted' : 'rejected'
-                );
+                // This provides backward compatibility during the transition
+                const requestId = data.payload.requestId;
+                const status = data.payload.accepted ? 'accepted' : 'rejected';
                 
-                if (!request) {
-                  console.error(`Connection request not found: ${requestId}`);
-                  ws.send(JSON.stringify({
-                    type: 'error',
-                    payload: { message: 'Connection request not found' }
-                  }));
-                  break;
-                }
+                // Make a request to the HTTP API
+                await fetch(`/api/connection-requests/${requestId}`, {
+                  method: 'PATCH',
+                  headers: {
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ status }),
+                  credentials: 'include' // Include cookies for auth
+                });
                 
-                // Get the responder information with sensitive fields removed
-                const responder = await storage.getUser(userId);
-                if (!responder) {
-                  console.error(`Responder user not found: ${userId}`);
-                  break;
-                }
-                
-                const safeResponder = {
-                  id: responder.id,
-                  username: responder.username,
-                  email: responder.email,
-                  displayName: responder.displayName,
-                  avatarUrl: responder.avatarUrl,
-                  status: responder.status
-                };
-                
-                // Notify the original sender of the connection request if they're online
-                if (isUserConnected(request.senderId)) {
-                  console.log(`Sending connection response to user ${request.senderId}: ${accepted ? 'accepted' : 'rejected'}`);
-                  
-                  const client = connectedClients.get(request.senderId);
-                  client?.send(JSON.stringify({
-                    type: 'connection_response',
-                    payload: {
-                      requestId,
-                      accepted,
-                      responder: safeResponder
-                    }
-                  }));
-                } else {
-                  console.log(`Sender ${request.senderId} is offline, response will be saved for later`);
-                }
-                
-                // If the request was accepted, create a chat between the users
-                if (accepted) {
-                  console.log(`Connection accepted, creating chat between users ${userId} and ${request.senderId}`);
-                  
-                  // Check if there's already a chat between these users
-                  const userChats = await storage.getChatsByUserId(userId);
-                  let existingChat = false;
-                  
-                  for (const chat of userChats) {
-                    const participants = await storage.getChatParticipants(chat.id);
-                    if (participants.some(p => p.id === request.senderId)) {
-                      existingChat = true;
-                      console.log(`Chat already exists: ${chat.id}`);
-                      break;
-                    }
-                  }
-                  
-                  if (!existingChat) {
-                    // Create a new chat
-                    const newChat = await storage.createChat({});
-                    console.log(`Created new chat: ${newChat.id}`);
-                    
-                    // Add both users as participants
-                    await storage.addParticipantToChat({
-                      chatId: newChat.id,
-                      userId: userId
-                    });
-                    
-                    await storage.addParticipantToChat({
-                      chatId: newChat.id,
-                      userId: request.senderId
-                    });
-                    
-                    // Prepare enhanced chat with participants info
-                    const participants = await storage.getChatParticipants(newChat.id);
-                    const enhancedChat = {
-                      ...newChat,
-                      participants,
-                      lastMessage: null
-                    };
-                    
-                    // Notify both users of the new chat
-                    if (isUserConnected(userId)) {
-                      console.log(`Notifying responder ${userId} of new chat`);
-                      connectedClients.get(userId)?.send(JSON.stringify({
-                        type: 'chat_created',
-                        payload: { chat: enhancedChat }
-                      }));
-                    }
-                    
-                    if (isUserConnected(request.senderId)) {
-                      console.log(`Notifying sender ${request.senderId} of new chat`);
-                      connectedClients.get(request.senderId)?.send(JSON.stringify({
-                        type: 'chat_created',
-                        payload: { chat: enhancedChat }
-                      }));
-                    }
-                  }
-                }
-                
-                // Acknowledge to the responder
+                // Acknowledge to the client
                 ws.send(JSON.stringify({
                   type: 'notification',
                   payload: { 
-                    message: accepted ? 
-                      'Connection accepted successfully' : 
-                      'Connection rejected successfully' 
+                    message: 'Connection request processed. This approach is deprecated, please update your client.' 
                   }
                 }));
               } catch (error) {
-                console.error('Error processing connection response:', error);
+                console.error('Error redirecting WebSocket connection_response to HTTP API:', error);
                 ws.send(JSON.stringify({
                   type: 'error',
                   payload: { message: 'Failed to process connection response' }
@@ -516,6 +355,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Create new request
       const newRequest = await storage.createConnectionRequest(validRequest);
+      
+      // Notify receiver via WebSocket if they're connected
+      if (isUserConnected(validRequest.receiverId)) {
+        console.log(`Sending connection request notification to user ${validRequest.receiverId} from HTTP endpoint`);
+        
+        // Get the sender information
+        const sender = await storage.getUser(currentUser.id);
+        
+        if (sender) {
+          // Prepare the full request object with sender info
+          const fullRequest = {
+            ...newRequest,
+            sender: {
+              id: sender.id,
+              username: sender.username,
+              email: sender.email,
+              displayName: sender.displayName,
+              avatarUrl: sender.avatarUrl,
+              status: sender.status
+            }
+          };
+          
+          // Send WebSocket notification to receiver
+          const receiverClient = connectedClients.get(validRequest.receiverId);
+          receiverClient?.send(JSON.stringify({
+            type: 'connection_request',
+            payload: {
+              request: fullRequest
+            }
+          }));
+        }
+      }
+      
       res.status(201).json(newRequest);
     } catch (error) {
       if (error instanceof ZodError) {
@@ -557,10 +429,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: 'Connection request not found' });
       }
       
-      // If request was accepted, create a chat between the users
-      if (status === 'accepted') {
-        const currentUser = req.user as User;
+      const currentUser = req.user as User;
+      const accepted = status === 'accepted';
+      
+      // Notify the sender of the request via WebSocket
+      if (isUserConnected(updatedRequest.senderId)) {
+        console.log(`Sending connection response to user ${updatedRequest.senderId} from HTTP endpoint: ${accepted ? 'accepted' : 'rejected'}`);
         
+        // Prepare the responder information
+        const safeResponder = {
+          id: currentUser.id,
+          username: currentUser.username,
+          email: currentUser.email,
+          displayName: currentUser.displayName,
+          avatarUrl: currentUser.avatarUrl,
+          status: currentUser.status
+        };
+        
+        // Send WebSocket notification to the original sender
+        const senderClient = connectedClients.get(updatedRequest.senderId);
+        senderClient?.send(JSON.stringify({
+          type: 'connection_response',
+          payload: {
+            requestId,
+            accepted,
+            responder: safeResponder
+          }
+        }));
+      }
+      
+      let newChatCreated = null;
+      
+      // If request was accepted, create a chat between the users
+      if (accepted) {
         // Check if there's already a chat between these users
         const userChats = await storage.getChatsByUserId(currentUser.id);
         let existingChat = false;
@@ -588,19 +489,46 @@ export async function registerRoutes(app: Express): Promise<Server> {
             userId: updatedRequest.senderId
           });
           
-          res.json({ 
-            request: updatedRequest,
-            chat: newChat
-          });
-        } else {
-          res.json({ 
-            request: updatedRequest
-          });
+          // Get all participants
+          const participants = await storage.getChatParticipants(newChat.id);
+          
+          // Create enhanced chat object
+          const enhancedChat = {
+            ...newChat,
+            participants,
+            lastMessage: null
+          };
+          
+          // Store for response
+          newChatCreated = newChat;
+          
+          // Notify both users of the new chat via WebSocket
+          if (isUserConnected(currentUser.id)) {
+            connectedClients.get(currentUser.id)?.send(JSON.stringify({
+              type: 'chat_created',
+              payload: { chat: enhancedChat }
+            }));
+          }
+          
+          if (isUserConnected(updatedRequest.senderId)) {
+            connectedClients.get(updatedRequest.senderId)?.send(JSON.stringify({
+              type: 'chat_created',
+              payload: { chat: enhancedChat }
+            }));
+          }
         }
+      }
+      
+      if (newChatCreated) {
+        res.json({ 
+          request: updatedRequest,
+          chat: newChatCreated
+        });
       } else {
         res.json({ request: updatedRequest });
       }
     } catch (error) {
+      console.error('Error updating connection request:', error);
       res.status(500).json({ message: 'Error updating connection request' });
     }
   });

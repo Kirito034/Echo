@@ -110,6 +110,8 @@ export function AddUserDialog({ trigger, onUserAdded, addMessageListener, sendMe
 
   const { mutate: sendConnectionRequest, isPending: isSendingRequest } = useMutation({
     mutationFn: async ({ receiverId, message }: { receiverId: number; message?: string }) => {
+      // Send connection request via HTTP API only
+      // WebSocket notification will be triggered on the server after DB insert
       return apiRequest('POST', '/api/connection-requests', {
         receiverId,
         message,
@@ -122,14 +124,8 @@ export function AddUserDialog({ trigger, onUserAdded, addMessageListener, sendMe
         description: 'Connection request sent successfully',
       });
       
-      // Also send via WebSocket for real-time notification
-      sendMessage({
-        type: 'connection_request',
-        payload: { 
-          receiverId: searchResult!.id,
-          message: form.getValues('message')
-        }
-      });
+      // We no longer send a duplicate request via WebSocket
+      // The server handles real-time notifications after the DB insert
     },
     onError: (error: any) => {
       if (error.status === 400 && error.data?.message?.includes('already exists')) {
