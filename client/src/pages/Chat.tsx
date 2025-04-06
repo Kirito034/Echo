@@ -300,12 +300,24 @@ const ChatPage: React.FC = () => {
       }
     );
     
-    // Send via API only - the server will handle WebSocket notifications
-    // This prevents duplicate messages being sent
-    sendMessageMutation({ chatId: selectedChatId, content, mediaUrl, mediaType });
+    // First send via WebSocket for real-time delivery
+    sendMessage({
+      type: 'message',
+      payload: {
+        message: {
+          chatId: selectedChatId,
+          senderId: currentUser.id,
+          content,
+          mediaUrl,
+          mediaType,
+          status: 'sent',
+          skipDatabaseSave: true // Flag to tell server not to save this in database
+        }
+      }
+    });
     
-    // We don't need to send via WebSocket as well, as this creates duplicate messages
-    // The HTTP endpoint will handle the database save and WebSocket notifications
+    // Then send via API for persistent storage
+    sendMessageMutation({ chatId: selectedChatId, content, mediaUrl, mediaType });
   }, [selectedChatId, currentUser, queryClient, sendMessageMutation, sendMessage]);
   
   // Handler for initiating calls

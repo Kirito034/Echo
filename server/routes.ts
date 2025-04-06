@@ -14,7 +14,8 @@ import {
   messages,
   type WSMessage,
   type User,
-  type ConnectionRequest
+  type ConnectionRequest,
+  type Message
 } from "@shared/schema";
 import { ZodError } from "zod";
 
@@ -108,10 +109,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
             if (userId && data.payload.message) {
               try {
                 console.log(`Processing message from user ${userId} to chat ${data.payload.message.chatId}`);
-                const validMessage = insertMessageSchema.parse(data.payload.message);
-                const savedMessage = await storage.createMessage(validMessage);
                 
-                console.log(`Message saved to database, id: ${savedMessage.id}, chatId: ${savedMessage.chatId}`);
+                // Check if this message should be saved to database or just forwarded
+                const skipDatabaseSave = data.payload.message.skipDatabaseSave === true;
+                let savedMessage: Message;
+                
+                if (skipDatabaseSave) {
+                  console.log(`Skipping database save for WebSocket-only message from user ${userId}`);
+                  // Create a temporary message object that looks like it came from the database
+                  savedMessage = {
+                    id: Date.now(), // Temporary ID
+                    chatId: data.payload.message.chatId,
+                    senderId: userId,
+                    content: data.payload.message.content || null,
+                    mediaUrl: data.payload.message.mediaUrl || null,
+                    mediaType: data.payload.message.mediaType || null,
+                    isRead: false,
+                    sentAt: new Date(),
+                    status: 'sent'
+                  };
+                } else {
+                  // Normal flow - save to database
+                  const validMessage = insertMessageSchema.parse(data.payload.message);
+                  savedMessage = await storage.createMessage(validMessage);
+                  console.log(`Message saved to database, id: ${savedMessage.id}, chatId: ${savedMessage.chatId}`);
+                }
                 
                 // Get chat participants to notify
                 const participants = await storage.getChatParticipants(savedMessage.chatId);
@@ -158,11 +180,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 if (participants.some(p => p.id !== userId && isUserConnected(p.id))) {
                   messageStatus = 'delivered';
                   
-                  // Update message status in database
-                  await db
-                    .update(messages)
-                    .set({ status: messageStatus })
-                    .where(eq(messages.id, savedMessage.id));
+                  // Update message status in database only if this isn't a WebSocket-only message
+                  if (!skipDatabaseSave) {
+                    await db
+                      .update(messages)
+                      .set({ status: messageStatus })
+                      .where(eq(messages.id, savedMessage.id));
+                  }
                     
                   // Update the savedMessage object
                   savedMessage.status = messageStatus;
