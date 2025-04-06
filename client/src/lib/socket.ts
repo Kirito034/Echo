@@ -180,8 +180,9 @@ export const useSocket = (userId: number | null) => {
       setIsConnected(true);
       setError(null);
       
-      // Send user status once connected
-      if (socketInstance?.readyState === WebSocket.OPEN) {
+      // Only send user status if we didn't already do it above
+      // This prevents duplicate status messages
+      if (socketInstance?.readyState === WebSocket.OPEN && currentUserId !== userId) {
         socketInstance.send(JSON.stringify({
           type: 'user_status',
           payload: { 

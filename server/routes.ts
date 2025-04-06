@@ -72,19 +72,34 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 if (clientIdMap.has(existingConnection.clientId)) {
                   clientIdMap.delete(existingConnection.clientId);
                 }
+                
+                // Register the new connection
+                connectedClients.set(userId, { ws, clientId: messageClientId });
+                clientIdMap.set(messageClientId, userId);
+                
+                console.log(`User ${userId} registered with WebSocket (client ID: ${messageClientId}). Total connected: ${connectedClients.size}`);
+                
+                // Update user status to online
+                await storage.updateUserStatus(userId, 'online');
+                
+                // Broadcast user status change to all connected clients
+                broadcastUserStatus(userId, 'online');
+              } 
+              // If this is a new connection (user not previously connected)
+              else if (!existingConnection) {
+                // Register this connection
+                connectedClients.set(userId, { ws, clientId: messageClientId });
+                clientIdMap.set(messageClientId, userId);
+                
+                console.log(`User ${userId} registered with WebSocket (client ID: ${messageClientId}). Total connected: ${connectedClients.size}`);
+                
+                // Update user status to online
+                await storage.updateUserStatus(userId, 'online');
+                
+                // Broadcast user status change to all connected clients
+                broadcastUserStatus(userId, 'online');
               }
-              
-              // Register this connection
-              connectedClients.set(userId, { ws, clientId: messageClientId });
-              clientIdMap.set(messageClientId, userId);
-              
-              console.log(`User ${userId} registered with WebSocket (client ID: ${messageClientId}). Total connected: ${connectedClients.size}`);
-              
-              // Update user status to online
-              await storage.updateUserStatus(userId, 'online');
-              
-              // Broadcast user status change to all connected clients
-              broadcastUserStatus(userId, 'online');
+              // For existing connections with the same clientId, do nothing to avoid duplicate messages
             }
             break;
             
@@ -103,10 +118,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 console.log(`Chat ${savedMessage.chatId} has ${participants.length} participants`);
                 
                 // Send the message to all participants in the chat
+                // Use a Set to track participants we've already notified to avoid duplicates
+                const notifiedParticipants = new Set<number>();
                 let notifiedCount = 0;
+                
                 participants.forEach(participant => {
-                  // Don't send the message back to the sender
-                  if (participant.id !== userId && isUserConnected(participant.id)) {
+                  // Don't send the message back to the sender and check if we've already notified this participant
+                  if (participant.id !== userId && 
+                      isUserConnected(participant.id) && 
+                      !notifiedParticipants.has(participant.id)) {
+                      
                     const client = connectedClients.get(participant.id);
                     if (client && client.ws.readyState === WebSocket.OPEN) {
                       // Create message with updated status for delivery to other participants
@@ -120,6 +141,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
                         payload: { message: messageToSend }
                       }));
                       
+                      // Mark this participant as notified
+                      notifiedParticipants.add(participant.id);
                       notifiedCount++;
                       console.log(`Sent message to participant ${participant.id}`);
                     } else {
@@ -845,15 +868,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       // Send the message to all participants in the chat via WebSocket
+      // Use a Set to track participants we've already notified to avoid duplicates
+      const notifiedParticipants = new Set<number>();
       let notifiedCount = 0;
+      
       participants.forEach(participant => {
-        if (participant.id !== currentUser.id && isUserConnected(participant.id)) {
+        // Don't send the message back to the sender and check if we've already notified this participant
+        if (participant.id !== currentUser.id && 
+            isUserConnected(participant.id) && 
+            !notifiedParticipants.has(participant.id)) {
+            
           const client = connectedClients.get(participant.id);
           if (client && client.ws.readyState === WebSocket.OPEN) {
             client.ws.send(JSON.stringify({
               type: 'message',
               payload: { message: newMessage }
             }));
+            
+            // Mark this participant as notified
+            notifiedParticipants.add(participant.id);
             notifiedCount++;
             console.log(`HTTP endpoint: Sent message to participant ${participant.id}`);
           }

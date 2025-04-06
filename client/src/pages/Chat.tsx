@@ -69,9 +69,19 @@ const ChatPage: React.FC = () => {
           (oldMessages = []) => {
             if (!oldMessages) return [message];
             
-            // Check if message already exists in the list
-            const messageExists = oldMessages.some(m => m.id === message.id);
+            // Check if message already exists in the list (by id or by content/sender for new messages)
+            const messageExists = oldMessages.some(m => 
+              // Check for same ID if the message has an ID (already in DB)
+              (m.id === message.id && message.id) || 
+              // Check for same content and sender for messages that might not have an ID yet
+              (m.content === message.content && 
+               m.senderId === message.senderId && 
+               Math.abs(new Date(m.createdAt || Date.now()).getTime() - 
+                       new Date(message.createdAt || Date.now()).getTime()) < 5000)
+            );
+            
             if (messageExists) {
+              console.log('Skipping duplicate message:', message.content);
               return oldMessages;
             }
             
