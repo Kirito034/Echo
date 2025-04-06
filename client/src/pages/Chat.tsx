@@ -53,6 +53,12 @@ const ChatPage: React.FC = () => {
       // On new message received
       console.log('Message received in Chat.tsx:', message);
       
+      // If this is the sender, don't do anything as we handle sent messages differently
+      if (message.senderId === currentUser?.id) {
+        console.log('Skipping own message reflected back');
+        return;
+      }
+      
       // Immediately update the messages list if the chat is currently selected
       if (selectedChatId === message.chatId) {
         console.log('Updating current chat messages');
@@ -61,27 +67,35 @@ const ChatPage: React.FC = () => {
         queryClient.setQueryData<Message[]>(
           ['/api/chats', message.chatId, 'messages'],
           (oldMessages = []) => {
+            if (!oldMessages) return [message];
+            
             // Check if message already exists in the list
             const messageExists = oldMessages.some(m => m.id === message.id);
             if (messageExists) {
               return oldMessages;
             }
+            
+            // Add the new message
             return [...oldMessages, message];
           }
         );
-      }
-      
-      // Also update the chats list to show latest message
-      queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
-      
-      // If it's a message from a different chat, indicate it as new message
-      if (selectedChatId !== message.chatId) {
+        
+        // Mark message as read since we're currently viewing this chat
+        sendMessage({
+          type: 'read',
+          payload: { messageId: message.id }
+        });
+      } else if (message.chatId) {
+        // If it's from a different chat, show notification
         toast({
           title: 'New message',
           description: `You have a new message in a different chat`,
           duration: 3000,
         });
       }
+      
+      // Always update the chats list to show latest message
+      queryClient.invalidateQueries({ queryKey: ['/api/chats'] });
     },
     (userId, chatId) => {
       // On typing indicator

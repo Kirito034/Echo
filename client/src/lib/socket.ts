@@ -27,22 +27,94 @@ const createWebSocket = () => {
     console.log('WebSocket connected');
     isSocketConnecting = false;
     
+    // Reset reconnection attempts on successful connection
+    sessionStorage.setItem('ws-reconnect-attempt', '0');
+    
+    // Process any queued messages from local storage
+    try {
+      const pendingMessages = JSON.parse(localStorage.getItem('pendingMessages') || '[]');
+      
+      if (pendingMessages.length > 0) {
+        console.log(`Found ${pendingMessages.length} pending messages to send`);
+        
+        // Process messages newer than 10 minutes (600000ms)
+        const now = Date.now();
+        const maxAge = 10 * 60 * 1000; // 10 minutes
+        const validMessages = pendingMessages.filter(item => now - item.timestamp < maxAge);
+        
+        // Send valid messages
+        validMessages.forEach((item, index) => {
+          setTimeout(() => {
+            if (socketInstance?.readyState === WebSocket.OPEN) {
+              console.log(`Sending queued message ${index + 1}/${validMessages.length}`);
+              try {
+                socketInstance.send(JSON.stringify(item.message));
+              } catch (e) {
+                console.error('Failed to send queued message:', e);
+              }
+            }
+          }, index * 100); // Stagger sends to avoid overloading
+        });
+        
+        // Clear processed messages
+        localStorage.setItem('pendingMessages', JSON.stringify([]));
+      }
+    } catch (e) {
+      console.error('Error processing queued messages:', e);
+      // Clear potentially corrupted data
+      localStorage.removeItem('pendingMessages');
+    }
+    
     // Notify all components that the connection is established
     document.dispatchEvent(new CustomEvent('ws-connected'));
   };
   
-  socketInstance.onclose = () => {
-    console.log('WebSocket disconnected');
+  socketInstance.onclose = (event) => {
+    console.log(`WebSocket disconnected. Code: ${event.code}, Reason: ${event.reason || 'No reason provided'}`);
     isSocketConnecting = false;
     socketInstance = null;
     
     // Notify all components that the connection is closed
-    document.dispatchEvent(new CustomEvent('ws-disconnected'));
+    document.dispatchEvent(new CustomEvent('ws-disconnected', { 
+      detail: { code: event.code, reason: event.reason } 
+    }));
     
-    // Attempt to reconnect after a delay
+    // Implement exponential backoff for reconnection attempts
+    // Store reconnection attempt count in sessionStorage to persist across page refreshes
+    const currentAttempt = parseInt(sessionStorage.getItem('ws-reconnect-attempt') || '0');
+    const nextAttempt = currentAttempt + 1;
+    sessionStorage.setItem('ws-reconnect-attempt', nextAttempt.toString());
+    
+    // Calculate delay with exponential backoff (1s, 2s, 4s, 8s, etc.) with a max of 30s
+    const baseDelay = 1000;
+    const maxDelay = 30000;
+    const exponentialDelay = Math.min(baseDelay * Math.pow(2, currentAttempt), maxDelay);
+    
+    // For certain closure codes, try to reconnect immediately
+    // 1000: Normal closure
+    // 1001: Going away (page navigation)
+    // 1006: Abnormal closure (likely network issue)
+    const urgentReconnectCodes = [1006];
+    const normalClosureCodes = [1000, 1001];
+    
+    let reconnectDelay = exponentialDelay;
+    
+    if (urgentReconnectCodes.includes(event.code)) {
+      // For network issues, try a faster reconnect
+      reconnectDelay = Math.min(1000, exponentialDelay); 
+      console.log(`Urgent reconnect scheduled in ${reconnectDelay}ms`);
+    } else if (normalClosureCodes.includes(event.code)) {
+      // For normal closures, use a bit longer delay
+      reconnectDelay = Math.max(2000, exponentialDelay);
+      console.log(`Normal reconnect scheduled in ${reconnectDelay}ms`);
+    } else {
+      console.log(`Standard reconnect scheduled in ${reconnectDelay}ms`);
+    }
+    
+    // Schedule reconnection
     setTimeout(() => {
       createWebSocket();
-    }, 3000);
+    }, reconnectDelay);
   };
   
   socketInstance.onerror = (error) => {
@@ -56,6 +128,8 @@ const createWebSocket = () => {
   socketInstance.onmessage = (event) => {
     try {
       const message = JSON.parse(event.data) as WSMessage;
+      // Log for debugging
+      console.log(`WebSocket received: ${message.type}`, message.payload);
       // Notify all registered message listeners
       messageListeners.forEach(listener => listener(message));
     } catch (error) {
@@ -143,14 +217,71 @@ export const useSocket = (userId: number | null) => {
     };
   }, []);
 
-  // Send message to server
+  // Send message to server with retry capabilities
   const sendMessage = useCallback((message: WSMessage) => {
-    if (socketInstance?.readyState === WebSocket.OPEN) {
-      socketInstance.send(JSON.stringify(message));
-    } else {
+    const attemptSend = (socket: WebSocket | null, attempt = 0) => {
+      if (socket?.readyState === WebSocket.OPEN) {
+        try {
+          socket.send(JSON.stringify(message));
+          return true;
+        } catch (e) {
+          console.error(`Error sending message (attempt ${attempt}):`, e);
+          return false;
+        }
+      }
+      return false;
+    };
+    
+    // Try to send with current socket
+    const sent = attemptSend(socketInstance, 0);
+    
+    if (!sent) {
       setError('Connection to chat server lost. Attempting to reconnect...');
       
-      // Attempt to reconnect
+      // Message couldn't be sent - store for retry if it's important
+      if (['message', 'read', 'call_request', 'call_response'].includes(message.type)) {
+        // For important messages, try a few more times with increasing delays
+        const maxRetries = 3;
+        
+        // Create a queue of retry attempts
+        for (let i = 0; i < maxRetries; i++) {
+          setTimeout(() => {
+            // Get the most current socket instance
+            const currentSocket = socketInstance;
+            
+            if (currentSocket?.readyState === WebSocket.OPEN) {
+              console.log(`Retrying message send, attempt ${i + 1}...`);
+              if (attemptSend(currentSocket, i + 1)) {
+                console.log(`Successfully sent message on retry ${i + 1}`);
+              }
+            } else if (i === maxRetries - 1) {
+              // Last retry attempt failed, queue for later after reconnection
+              console.log('Maximum retries reached, will try after reconnection');
+              
+              // Use local storage to queue critical messages
+              if (message.type === 'message') {
+                try {
+                  const pendingMessages = JSON.parse(localStorage.getItem('pendingMessages') || '[]');
+                  pendingMessages.push({
+                    message,
+                    timestamp: Date.now()
+                  });
+                  // Only keep last 50 messages to avoid storage issues
+                  if (pendingMessages.length > 50) {
+                    pendingMessages.shift();
+                  }
+                  localStorage.setItem('pendingMessages', JSON.stringify(pendingMessages));
+                  console.log('Message queued for delivery after reconnection');
+                } catch (e) {
+                  console.error('Failed to queue message for later:', e);
+                }
+              }
+            }
+          }, Math.pow(2, i) * 500); // Exponential backoff: 500ms, 1000ms, 2000ms
+        }
+      }
+      
+      // Attempt to reconnect if not already trying
       if (!isSocketConnecting) {
         createWebSocket();
       }

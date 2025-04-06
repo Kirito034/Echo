@@ -88,13 +88,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 // Send the message to all participants in the chat
                 let notifiedCount = 0;
                 participants.forEach(participant => {
+                  // Don't send the message back to the sender
                   if (participant.id !== userId && isUserConnected(participant.id)) {
                     const client = connectedClients.get(participant.id);
                     if (client && client.readyState === WebSocket.OPEN) {
+                      // Create message with updated status for delivery to other participants
+                      const messageToSend = {
+                        ...savedMessage,
+                        status: 'delivered' // Mark as delivered for recipients
+                      };
+                      
                       client.send(JSON.stringify({
                         type: 'message',
-                        payload: { message: savedMessage }
+                        payload: { message: messageToSend }
                       }));
+                      
                       notifiedCount++;
                       console.log(`Sent message to participant ${participant.id}`);
                     } else {
@@ -120,14 +128,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   savedMessage.status = messageStatus;
                 }
                 
-                // Confirm receipt to sender
-                ws.send(JSON.stringify({
-                  type: 'message_sent',
-                  payload: { 
-                    messageId: savedMessage.id,
-                    status: messageStatus
+                // Confirm receipt to sender - only if the WebSocket is still open
+                if (ws.readyState === WebSocket.OPEN) {
+                  console.log(`Confirming message receipt to sender: ID ${savedMessage.id}, status ${messageStatus}`);
+                  try {
+                    ws.send(JSON.stringify({
+                      type: 'message_sent',
+                      payload: { 
+                        messageId: savedMessage.id,
+                        status: messageStatus
+                      }
+                    }));
+                    console.log(`Successfully sent confirmation to sender ${userId}`);
+                  } catch (confirmError) {
+                    console.error(`Failed to send confirmation to sender ${userId}:`, confirmError);
                   }
-                }));
+                } else {
+                  console.warn(`Cannot confirm message receipt: WebSocket for user ${userId} is no longer open`);
+                }
               } catch (error) {
                 console.error('Error processing message:', error);
                 if (error instanceof ZodError) {
@@ -168,26 +186,47 @@ export async function registerRoutes(app: Express): Promise<Server> {
             // Handle read receipts
             if (userId && data.payload.messageId) {
               const messageId = data.payload.messageId;
-              const updatedMessage = await storage.markMessageAsRead(messageId);
+              console.log(`Processing read receipt for message ${messageId} from user ${userId}`);
               
-              if (updatedMessage) {
-                // Update message status to read
-                await db
-                  .update(messages)
-                  .set({ status: 'read' })
-                  .where(eq(messages.id, messageId));
+              try {
+                const updatedMessage = await storage.markMessageAsRead(messageId);
                 
-                console.log(`WebSocket: Updated message ${messageId} status to 'read'`);
-                
-                // Get the sender to notify them that their message was read
-                const sender = await storage.getUser(updatedMessage.senderId);
-                if (sender && isUserConnected(sender.id)) {
-                  const client = connectedClients.get(sender.id);
-                  client?.send(JSON.stringify({
-                    type: 'read',
-                    payload: { messageId, status: 'read' }
-                  }));
+                if (updatedMessage) {
+                  // Update message status to read
+                  await db
+                    .update(messages)
+                    .set({ status: 'read' })
+                    .where(eq(messages.id, messageId));
+                  
+                  console.log(`WebSocket: Updated message ${messageId} status to 'read'`);
+                  
+                  // Get the sender to notify them that their message was read
+                  const sender = await storage.getUser(updatedMessage.senderId);
+                  if (sender && sender.id !== userId) { // Don't notify if sender is marking their own message as read
+                    console.log(`Notifying sender ${sender.id} that message ${messageId} was read by ${userId}`);
+                    
+                    if (isUserConnected(sender.id)) {
+                      const client = connectedClients.get(sender.id);
+                      client?.send(JSON.stringify({
+                        type: 'read',
+                        payload: { messageId, status: 'read' }
+                      }));
+                      console.log(`Successfully sent read receipt to sender ${sender.id}`);
+                    } else {
+                      console.log(`Sender ${sender.id} is not connected, cannot send read receipt`);
+                    }
+                  } else {
+                    console.log(`Skipping read receipt notification: sender is ${sender?.id}, reader is ${userId}`);
+                  }
+                } else {
+                  console.log(`Could not find message ${messageId} to mark as read`);
                 }
+              } catch (error) {
+                console.error(`Error processing read receipt for message ${messageId}:`, error);
+                ws.send(JSON.stringify({
+                  type: 'error',
+                  payload: { message: 'Failed to mark message as read' }
+                }));
               }
             }
             break;
