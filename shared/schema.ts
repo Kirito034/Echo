@@ -165,6 +165,7 @@ export type WSMessageType =
 export interface WSMessage {
   type: WSMessageType;
   payload: any;
+  clientId?: string; // Optional client ID for tracking unique clients
 }
 
 // Now we can define all the relations after all tables are defined

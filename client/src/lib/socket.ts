@@ -1,9 +1,13 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { WSMessage } from '@shared/schema';
 
+// Generate a unique client ID for this browser session
+const CLIENT_ID = `ws-client-${Math.random().toString(36).substring(2, 15)}`;
+
 // Create a singleton WebSocket instance
 let socketInstance: WebSocket | null = null;
 let isSocketConnecting = false;
+let currentUserId: number | null = null;
 const messageListeners: ((message: WSMessage) => void)[] = [];
 
 // Create a WebSocket instance
@@ -19,7 +23,7 @@ const createWebSocket = () => {
   isSocketConnecting = true;
   
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${window.location.host}/ws`;
+  const wsUrl = `${protocol}//${window.location.host}/ws?clientId=${CLIENT_ID}`;
   
   socketInstance = new WebSocket(wsUrl);
   
@@ -40,10 +44,10 @@ const createWebSocket = () => {
         // Process messages newer than 10 minutes (600000ms)
         const now = Date.now();
         const maxAge = 10 * 60 * 1000; // 10 minutes
-        const validMessages = pendingMessages.filter(item => now - item.timestamp < maxAge);
+        const validMessages = pendingMessages.filter((item: any) => now - item.timestamp < maxAge);
         
         // Send valid messages
-        validMessages.forEach((item, index) => {
+        validMessages.forEach((item: any, index: number) => {
           setTimeout(() => {
             if (socketInstance?.readyState === WebSocket.OPEN) {
               console.log(`Sending queued message ${index + 1}/${validMessages.length}`);
@@ -161,8 +165,14 @@ export const useSocket = (userId: number | null) => {
       // Send user status since we're already connected
       socket.send(JSON.stringify({
         type: 'user_status',
-        payload: { userId }
+        payload: { 
+          userId,
+          clientId: CLIENT_ID
+        }
       }));
+      
+      // Store current user ID for later use
+      currentUserId = userId;
     }
     
     // Setup event listeners for connection status changes
@@ -174,8 +184,14 @@ export const useSocket = (userId: number | null) => {
       if (socketInstance?.readyState === WebSocket.OPEN) {
         socketInstance.send(JSON.stringify({
           type: 'user_status',
-          payload: { userId }
+          payload: { 
+            userId,
+            clientId: CLIENT_ID
+          }
         }));
+        
+        // Store current user ID for later use
+        currentUserId = userId;
       }
     };
     

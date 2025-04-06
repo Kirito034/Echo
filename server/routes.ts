@@ -18,8 +18,10 @@ import {
 } from "@shared/schema";
 import { ZodError } from "zod";
 
-// Store connected clients with their user ID
-const connectedClients = new Map<number, WebSocket>();
+// Store connected clients with their user ID and client ID
+const connectedClients = new Map<number, { ws: WebSocket, clientId: string }>();
+// Track client IDs to prevent duplicate connections
+const clientIdMap = new Map<string, number>();
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication
@@ -31,8 +33,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
   // WebSocket connection handler
-  wss.on('connection', (ws: WebSocket) => {
-    console.log('Client connected to WebSocket');
+  wss.on('connection', (ws: WebSocket, req) => {
+    // Extract client ID from URL if available
+    const clientId = new URL(req.url || '', 'http://localhost').searchParams.get('clientId') || '';
+    console.log(`Client connected to WebSocket with clientId: ${clientId}`);
     let userId: number | null = null;
 
     // Heartbeat to keep connection alive
@@ -51,17 +55,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
           case 'user_status':
             // Associate this connection with a user ID
             userId = data.payload.userId;
+            const messageClientId = data.payload.clientId || clientId;
+            
             if (userId) {
               // Check if user already has a connection
               const existingConnection = connectedClients.get(userId);
-              if (existingConnection && existingConnection !== ws) {
-                console.log(`User ${userId} already has a connection. Closing old connection.`);
-                existingConnection.close();
+              
+              // If there's an existing connection with a different client ID, close it
+              if (existingConnection && existingConnection.clientId !== messageClientId) {
+                console.log(`User ${userId} already has a connection with different client ID. Closing old connection.`);
+                if (existingConnection.ws.readyState === WebSocket.OPEN) {
+                  existingConnection.ws.close();
+                }
+                
+                // Clean up any clientId mapping
+                if (clientIdMap.has(existingConnection.clientId)) {
+                  clientIdMap.delete(existingConnection.clientId);
+                }
               }
               
-              // Register new connection
-              connectedClients.set(userId, ws);
-              console.log(`User ${userId} registered with WebSocket. Total connected: ${connectedClients.size}`);
+              // Register this connection
+              connectedClients.set(userId, { ws, clientId: messageClientId });
+              clientIdMap.set(messageClientId, userId);
+              
+              console.log(`User ${userId} registered with WebSocket (client ID: ${messageClientId}). Total connected: ${connectedClients.size}`);
               
               // Update user status to online
               await storage.updateUserStatus(userId, 'online');
@@ -91,14 +108,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
                   // Don't send the message back to the sender
                   if (participant.id !== userId && isUserConnected(participant.id)) {
                     const client = connectedClients.get(participant.id);
-                    if (client && client.readyState === WebSocket.OPEN) {
+                    if (client && client.ws.readyState === WebSocket.OPEN) {
                       // Create message with updated status for delivery to other participants
                       const messageToSend = {
                         ...savedMessage,
                         status: 'delivered' // Mark as delivered for recipients
                       };
                       
-                      client.send(JSON.stringify({
+                      client.ws.send(JSON.stringify({
                         type: 'message',
                         payload: { message: messageToSend }
                       }));
@@ -173,7 +190,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               participants.forEach(participant => {
                 if (participant.id !== userId && isUserConnected(participant.id)) {
                   const client = connectedClients.get(participant.id);
-                  client?.send(JSON.stringify({
+                  client?.ws.send(JSON.stringify({
                     type: 'typing',
                     payload: { userId, chatId }
                   }));
@@ -207,7 +224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                     
                     if (isUserConnected(sender.id)) {
                       const client = connectedClients.get(sender.id);
-                      client?.send(JSON.stringify({
+                      client?.ws.send(JSON.stringify({
                         type: 'read',
                         payload: { messageId, status: 'read' }
                       }));
@@ -243,7 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 const caller = await storage.getUser(userId);
                 
                 if (caller) {
-                  client?.send(JSON.stringify({
+                  client?.ws.send(JSON.stringify({
                     type: 'call_request',
                     payload: { 
                       callerId: userId, 
@@ -266,7 +283,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               // Notify the caller of the response
               if (isUserConnected(callerId)) {
                 const client = connectedClients.get(callerId);
-                client?.send(JSON.stringify({
+                client?.ws.send(JSON.stringify({
                   type: 'call_response',
                   payload: { 
                     userId,
@@ -353,15 +370,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Helper function to check if a user is connected
   function isUserConnected(userId: number): boolean {
-    return connectedClients.has(userId) && 
-      connectedClients.get(userId)?.readyState === WebSocket.OPEN;
+    const client = connectedClients.get(userId);
+    return !!client && client.ws.readyState === WebSocket.OPEN;
   }
 
   // Helper function to broadcast user status changes
   function broadcastUserStatus(userId: number, status: string) {
     connectedClients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(JSON.stringify({
           type: 'user_status',
           payload: { userId, status }
         }));
@@ -531,7 +548,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Send WebSocket notification to receiver
           const receiverClient = connectedClients.get(validRequest.receiverId);
-          receiverClient?.send(JSON.stringify({
+          receiverClient?.ws.send(JSON.stringify({
             type: 'connection_request',
             payload: {
               request: fullRequest
@@ -600,7 +617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         // Send WebSocket notification to the original sender
         const senderClient = connectedClients.get(updatedRequest.senderId);
-        senderClient?.send(JSON.stringify({
+        senderClient?.ws.send(JSON.stringify({
           type: 'connection_response',
           payload: {
             requestId,
@@ -656,14 +673,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Notify both users of the new chat via WebSocket
           if (isUserConnected(currentUser.id)) {
-            connectedClients.get(currentUser.id)?.send(JSON.stringify({
+            connectedClients.get(currentUser.id)?.ws.send(JSON.stringify({
               type: 'chat_created',
               payload: { chat: enhancedChat }
             }));
           }
           
           if (isUserConnected(updatedRequest.senderId)) {
-            connectedClients.get(updatedRequest.senderId)?.send(JSON.stringify({
+            connectedClients.get(updatedRequest.senderId)?.ws.send(JSON.stringify({
               type: 'chat_created',
               payload: { chat: enhancedChat }
             }));
@@ -832,8 +849,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       participants.forEach(participant => {
         if (participant.id !== currentUser.id && isUserConnected(participant.id)) {
           const client = connectedClients.get(participant.id);
-          if (client && client.readyState === WebSocket.OPEN) {
-            client.send(JSON.stringify({
+          if (client && client.ws.readyState === WebSocket.OPEN) {
+            client.ws.send(JSON.stringify({
               type: 'message',
               payload: { message: newMessage }
             }));
