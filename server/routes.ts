@@ -895,6 +895,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log(`HTTP endpoint: Notified ${notifiedCount} participants about new message. Status: ${messageStatus}`);
       
+      // Send message confirmation to sender via WebSocket if they're connected
+      if (isUserConnected(currentUser.id)) {
+        const senderClient = connectedClients.get(currentUser.id);
+        if (senderClient && senderClient.ws.readyState === WebSocket.OPEN) {
+          console.log(`Sending message_sent confirmation to sender ${currentUser.id} for message ${newMessage.id}`);
+          senderClient.ws.send(JSON.stringify({
+            type: 'message_sent',
+            payload: { 
+              messageId: newMessage.id,
+              status: messageStatus
+            }
+          }));
+        }
+      }
+      
       res.status(201).json(newMessage);
     } catch (error) {
       console.error('Error creating message via HTTP:', error);

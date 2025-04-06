@@ -70,15 +70,22 @@ const ChatPage: React.FC = () => {
             if (!oldMessages) return [message];
             
             // Check if message already exists in the list (by id or by content/sender for new messages)
-            const messageExists = oldMessages.some(m => 
+            const messageExists = oldMessages.some(m => {
               // Check for same ID if the message has an ID (already in DB)
-              (m.id === message.id && message.id) || 
+              if (m.id === message.id && message.id) {
+                return true;
+              }
+              
               // Check for same content and sender for messages that might not have an ID yet
-              (m.content === message.content && 
-               m.senderId === message.senderId && 
-               Math.abs(new Date(m.createdAt || Date.now()).getTime() - 
-                       new Date(message.createdAt || Date.now()).getTime()) < 5000)
-            );
+              // Compare content, sender and timestamp (within 5 seconds)
+              if (m.content === message.content && m.senderId === message.senderId) {
+                const mTime = m.sentAt ? new Date(m.sentAt).getTime() : Date.now();
+                const msgTime = message.sentAt ? new Date(message.sentAt).getTime() : Date.now();
+                return Math.abs(mTime - msgTime) < 5000;
+              }
+              
+              return false;
+            });
             
             if (messageExists) {
               console.log('Skipping duplicate message:', message.content);
@@ -293,23 +300,12 @@ const ChatPage: React.FC = () => {
       }
     );
     
-    // Send via API
+    // Send via API only - the server will handle WebSocket notifications
+    // This prevents duplicate messages being sent
     sendMessageMutation({ chatId: selectedChatId, content, mediaUrl, mediaType });
     
-    // Also send via WebSocket for real-time
-    sendMessage({
-      type: 'message',
-      payload: {
-        message: {
-          chatId: selectedChatId,
-          senderId: currentUser.id,
-          content,
-          mediaUrl,
-          mediaType,
-          status: 'sent'
-        }
-      }
-    });
+    // We don't need to send via WebSocket as well, as this creates duplicate messages
+    // The HTTP endpoint will handle the database save and WebSocket notifications
   }, [selectedChatId, currentUser, queryClient, sendMessageMutation, sendMessage]);
   
   // Handler for initiating calls
