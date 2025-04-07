@@ -1,9 +1,9 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
-import { storage } from "./storage";
-import { setupAuth } from "./auth";
-import { db } from "./db";
+import { storage } from "./storage.ts";
+import { setupAuth } from "./auth.ts";
+import { db } from "./db.ts";
 import { eq } from "drizzle-orm";
 import { 
   insertUserSchema, 

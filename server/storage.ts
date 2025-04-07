@@ -4,13 +4,13 @@ import {
   chatParticipants, type ChatParticipant, type InsertChatParticipant,
   messages, type Message, type InsertMessage,
   connectionRequests, type ConnectionRequest, type InsertConnectionRequest
-} from "@shared/schema";
+} from "../shared/schema";
 import session from "express-session";
 import { Store } from "express-session";
-import { db } from "./db";
+import { db } from "./db.ts";
 import { eq, and, asc, or, inArray, ne, sql } from "drizzle-orm";
 import connectPg from "connect-pg-simple";
-import { pool } from "./db";
+import { pool } from "./db.ts";
 import createMemoryStore from "memorystore";
 
 // Create PostgreSQL session store

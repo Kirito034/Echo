@@ -1,5 +1,8 @@
 import { drizzle } from "drizzle-orm/node-postgres";
 import pkg from 'pg';
+import dotenv from 'dotenv';
+
+dotenv.config();
 const { Pool } = pkg;
 
 // Create a PostgreSQL connection pool

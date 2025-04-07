@@ -2,11 +2,11 @@ import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
-import { insertUserSchema } from "@shared/schema";
-import { useAuth } from "@/hooks/use-auth";
+import { insertUserSchema } from "../../../shared/schema";
+import { useAuth } from "../hooks/use-auth";
 import { Redirect } from "wouter";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import {
   Form,
   FormControl,
