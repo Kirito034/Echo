@@ -1,58 +1,37 @@
 import React from 'react';
 import { Link, useLocation } from 'wouter';
-import { MessageSquare, Phone, Users, Settings } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Home, User, LogOut } from 'lucide-react';
+import { useAuth } from '@/hooks/use-auth';
 
-const MobileNav: React.FC = () => {
+export default function MobileNav() {
   const [location] = useLocation();
-  
-  const navItems = [
-    {
-      icon: MessageSquare,
-      label: 'Chats',
-      href: '/',
-      isActive: location === '/'
-    },
-    {
-      icon: Phone,
-      label: 'Calls',
-      href: '/calls',
-      isActive: location === '/calls'
-    },
-    {
-      icon: Users,
-      label: 'Contacts',
-      href: '/contacts',
-      isActive: location === '/contacts'
-    },
-    {
-      icon: Settings,
-      label: 'Settings',
-      href: '/settings',
-      isActive: location === '/settings'
-    }
-  ];
-  
+  const { logoutMutation } = useAuth();
+
   return (
-    <nav className="md:hidden flex justify-around items-center p-3 border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900">
-      {navItems.map((item, index) => {
-        const Icon = item.icon;
-        return (
-          <Link key={index} href={item.href}>
-            <a className={cn(
-              "p-2 flex flex-col items-center",
-              item.isActive 
-                ? "text-primary" 
-                : "text-gray-500 dark:text-gray-400"
-            )}>
-              <Icon className="h-5 w-5" />
-              <span className="text-xs mt-1">{item.label}</span>
-            </a>
-          </Link>
-        );
-      })}
+    <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-background border-t border-border p-2 z-50">
+      <div className="grid grid-cols-3 gap-2">
+        <Link href="/">
+          <a className={`flex flex-col items-center justify-center py-2 ${location === '/' ? 'text-primary' : 'text-muted-foreground'}`}>
+            <Home className="h-5 w-5" />
+            <span className="text-xs mt-1">Home</span>
+          </a>
+        </Link>
+        
+        <Link href="/profile">
+          <a className={`flex flex-col items-center justify-center py-2 ${location === '/profile' ? 'text-primary' : 'text-muted-foreground'}`}>
+            <User className="h-5 w-5" />
+            <span className="text-xs mt-1">Profile</span>
+          </a>
+        </Link>
+        
+        <button
+          onClick={() => logoutMutation.mutate()}
+          className="flex flex-col items-center justify-center py-2 text-muted-foreground"
+        >
+          <LogOut className="h-5 w-5" />
+          <span className="text-xs mt-1">Logout</span>
+        </button>
+      </div>
     </nav>
   );
-};
-
-export default MobileNav;
+}

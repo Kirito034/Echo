@@ -12,6 +12,8 @@ export const users = pgTable("users", {
   displayName: text("display_name").notNull(),
   status: text("status").notNull().default("offline"),
   avatarUrl: text("avatar_url"),
+  bio: text("bio"),
+  phone: text("phone"),
   lastSeen: timestamp("last_seen").defaultNow(),
 });
 
@@ -25,6 +27,8 @@ export const insertUserSchema = createInsertSchema(users).pick({
   displayName: true,
   status: true,
   avatarUrl: true,
+  bio: true,
+  phone: true,
 });
 
 // Connection requests model

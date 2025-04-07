@@ -493,6 +493,58 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(404).json({ message: 'User not found' });
     }
   });
+  
+  // Update user profile
+  app.patch('/api/users/:id', isAuthenticated, async (req, res) => {
+    const userId = parseInt(req.params.id);
+    if (isNaN(userId)) {
+      return res.status(400).json({ message: 'Invalid user ID' });
+    }
+    
+    // Only allow users to update their own profile
+    if (req.user && req.user.id !== userId) {
+      return res.status(403).json({ message: 'You can only update your own profile' });
+    }
+    
+    try {
+      const { displayName, avatarUrl, bio, phone } = req.body;
+      const updatedFields: Partial<User> = {};
+      
+      if (displayName !== undefined) {
+        updatedFields.displayName = displayName;
+      }
+      
+      if (avatarUrl !== undefined) {
+        updatedFields.avatarUrl = avatarUrl;
+      }
+      
+      if (bio !== undefined) {
+        updatedFields.bio = bio;
+      }
+      
+      if (phone !== undefined) {
+        updatedFields.phone = phone;
+      }
+      
+      // Update the user in the database
+      const updatedUser = await storage.updateUser(userId, updatedFields);
+      
+      if (updatedUser) {
+        // Return the updated user
+        res.json(updatedUser);
+        
+        // If the user is connected via WebSocket, broadcast the profile update
+        if (isUserConnected(userId)) {
+          broadcastUserStatus(userId, updatedUser.status);
+        }
+      } else {
+        res.status(404).json({ message: 'User not found' });
+      }
+    } catch (error) {
+      console.error('Error updating user profile:', error);
+      res.status(500).json({ message: 'Failed to update profile' });
+    }
+  });
 
   app.post('/api/users', async (req, res) => {
     try {
